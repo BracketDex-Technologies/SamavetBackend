@@ -1,0 +1,422 @@
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { AccountStatus, UserRole } from '@prisma/client';
+import argon2 from 'argon2';
+import { slugify } from '../common/utils/slugify';
+import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
+import { CreateMandalDto } from './dto/create-mandal.dto';
+import { CreateMandalUserDto } from './dto/create-mandal-user.dto';
+import { ListMandalsQueryDto } from './dto/list-mandals-query.dto';
+import { DEFAULT_TEMPLATE_BACKGROUND_URL, ensureDefaultMandalWorkspace } from './mandal-defaults';
+import { UpdateMandalUserDto } from './dto/update-mandal-user.dto';
+import { UpdateMandalStatusDto } from './dto/update-mandal-status.dto';
+
+type JsonWriteValue = never;
+
+const ownerCreatableRoles = new Set<UserRole>([
+  UserRole.MANDAL_ADMIN,
+  UserRole.KHAJINDAR,
+  UserRole.GROUP_LEADER,
+  UserRole.MEMBER,
+]);
+
+interface MandalListWhere {
+  OR?: Array<{
+    city?: { contains: string; mode: 'insensitive' };
+    locality?: { contains: string; mode: 'insensitive' };
+    name?: { contains: string; mode: 'insensitive' };
+    slug?: { contains: string; mode: 'insensitive' };
+  }>;
+  status?: AccountStatus;
+}
+
+@Injectable()
+export class MandalsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storageService: StorageService,
+  ) {}
+
+  async create(dto: CreateMandalDto) {
+    const slug = dto.slug ?? slugify(dto.name);
+
+    if (!slug) {
+      throw new ConflictException('Mandal slug could not be generated.');
+    }
+
+    const existingMandal = await this.prisma.mandal.findUnique({ where: { slug } });
+
+    if (existingMandal) {
+      throw new ConflictException('Mandal slug already exists.');
+    }
+
+    const adminUniqueChecks = [
+      { email: dto.admin.email.toLowerCase() },
+      dto.admin.phone ? { phone: dto.admin.phone } : null,
+    ].filter(Boolean) as Array<{ email?: string; phone?: string }>;
+
+    const existingAdmin = await this.prisma.user.findFirst({
+      where: {
+        OR: adminUniqueChecks,
+      },
+    });
+
+    if (existingAdmin) {
+      throw new ConflictException('Admin email or phone is already used.');
+    }
+
+    const logoAsset = dto.logoDataUrl
+      ? await this.storageService.uploadDataUrl({
+          dataUrl: dto.logoDataUrl,
+          fileName: `${slug}-logo`,
+          folder: `mandals/${slug}/logo`,
+        })
+      : null;
+    const templateBackgroundUrl = dto.defaultTemplateUrl ?? DEFAULT_TEMPLATE_BACKGROUND_URL;
+
+    return this.prisma.$transaction(async (tx) => {
+      const mandal = await tx.mandal.create({
+        data: {
+          address: dto.address,
+          city: dto.city,
+          contactName: dto.contactName,
+          contactPhone: dto.contactPhone,
+          logoUrl: logoAsset?.url,
+          locality: dto.locality,
+          name: dto.name,
+          plan: dto.plan ?? 'starter',
+          slug,
+          state: dto.state,
+          status: AccountStatus.ACTIVE,
+        },
+      });
+
+      const admin = await tx.user.create({
+        data: {
+          email: dto.admin.email.toLowerCase(),
+          mandalId: mandal.id,
+          name: dto.admin.name,
+          passwordHash: await argon2.hash(dto.admin.password),
+          phone: dto.admin.phone,
+          role: UserRole.MANDAL_ADMIN,
+          status: AccountStatus.ACTIVE,
+        },
+      });
+
+      const { activeFestival, template, templateVersion } = await ensureDefaultMandalWorkspace(tx, {
+        createdByUserId: admin.id,
+        mandalId: mandal.id,
+        templateBackgroundUrl,
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          action: 'created',
+          after: this.toJson({
+            adminUserId: admin.id,
+            festivalId: activeFestival.id,
+            mandalId: mandal.id,
+            templateVersionId: templateVersion.id,
+          }),
+          entityId: mandal.id,
+          entityType: 'mandal',
+          mandalId: mandal.id,
+        },
+      });
+
+      return {
+        admin: this.serializeAdmin(admin),
+        mandal: {
+          ...mandal,
+          festivals: [
+            {
+              ...activeFestival,
+              templates: [
+                {
+                  ...template,
+                  versions: [templateVersion],
+                },
+              ],
+            },
+          ],
+        },
+      };
+    });
+  }
+
+  async list(query: ListMandalsQueryDto) {
+    const where: MandalListWhere = {
+      status: query.status,
+    };
+
+    if (query.search) {
+      where.OR = [
+        { name: { contains: query.search, mode: 'insensitive' } },
+        { slug: { contains: query.search, mode: 'insensitive' } },
+        { city: { contains: query.search, mode: 'insensitive' } },
+        { locality: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const skip = (query.page - 1) * query.limit;
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.mandal.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: query.limit,
+        where,
+      }),
+      this.prisma.mandal.count({ where }),
+    ]);
+
+    return {
+      items,
+      meta: {
+        limit: query.limit,
+        page: query.page,
+        total,
+        totalPages: Math.ceil(total / query.limit),
+      },
+    };
+  }
+
+  async getById(id: string) {
+    const mandal = await this.prisma.mandal.findUnique({
+      include: {
+        users: {
+          select: {
+            createdAt: true,
+            email: true,
+            id: true,
+            name: true,
+            phone: true,
+            role: true,
+            status: true,
+          },
+          where: {
+            role: UserRole.MANDAL_ADMIN,
+          },
+        },
+        _count: {
+          select: {
+            festivals: true,
+            members: true,
+            slips: true,
+          },
+        },
+      },
+      where: { id },
+    });
+
+    if (!mandal) {
+      throw new NotFoundException('Mandal not found.');
+    }
+
+    return mandal;
+  }
+
+  async listUsers(id: string) {
+    await this.ensureMandalExists(id);
+
+    return this.prisma.user.findMany({
+      orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
+      select: {
+        createdAt: true,
+        email: true,
+        id: true,
+        lastLoginAt: true,
+        name: true,
+        phone: true,
+        role: true,
+        status: true,
+      },
+      where: { mandalId: id },
+    });
+  }
+
+  async createUser(id: string, dto: CreateMandalUserDto) {
+    if (!ownerCreatableRoles.has(dto.role)) {
+      throw new BadRequestException('Role cannot be created for a mandal account.');
+    }
+
+    if (!dto.email && !dto.phone) {
+      throw new BadRequestException('Either email or phone is required for login.');
+    }
+
+    await this.ensureMandalExists(id);
+
+    const uniqueChecks = [
+      dto.email ? { email: dto.email.toLowerCase() } : null,
+      dto.phone ? { phone: dto.phone } : null,
+    ].filter(Boolean) as Array<{ email?: string; phone?: string }>;
+
+    const existingUser = await this.prisma.user.findFirst({
+      where: { OR: uniqueChecks },
+    });
+
+    if (existingUser) {
+      throw new ConflictException('User email or phone is already used.');
+    }
+
+    const user = await this.prisma.user.create({
+      data: {
+        email: dto.email?.toLowerCase(),
+        mandalId: id,
+        name: dto.name,
+        passwordHash: await argon2.hash(dto.password),
+        phone: dto.phone,
+        role: dto.role,
+        status: AccountStatus.ACTIVE,
+      },
+      select: {
+        createdAt: true,
+        email: true,
+        id: true,
+        name: true,
+        phone: true,
+        role: true,
+        status: true,
+      },
+    });
+
+    await this.prisma.auditEvent.create({
+      data: {
+        action: 'user_created',
+        after: this.toJson({ role: user.role, userId: user.id }),
+        entityId: user.id,
+        entityType: 'user',
+        mandalId: id,
+      },
+    });
+
+    return user;
+  }
+
+  async updateStatus(id: string, dto: UpdateMandalStatusDto) {
+    const mandal = await this.prisma.mandal.findUnique({ where: { id } });
+
+    if (!mandal) {
+      throw new NotFoundException('Mandal not found.');
+    }
+
+    const updated = await this.prisma.mandal.update({
+      data: { status: dto.status },
+      where: { id },
+    });
+
+    await this.prisma.auditEvent.create({
+      data: {
+        action: 'status_updated',
+        after: this.toJson({ status: updated.status }),
+        before: this.toJson({ status: mandal.status }),
+        entityId: id,
+        entityType: 'mandal',
+        mandalId: id,
+      },
+    });
+
+    return updated;
+  }
+
+  async updateUser(mandalId: string, userId: string, dto: UpdateMandalUserDto) {
+    await this.ensureMandalExists(mandalId);
+
+    if (dto.role && !ownerCreatableRoles.has(dto.role)) {
+      throw new BadRequestException('Role cannot be assigned for a mandal account.');
+    }
+
+    const before = await this.prisma.user.findFirst({ where: { id: userId, mandalId } });
+
+    if (!before) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const uniqueChecks = [
+      dto.email ? { email: dto.email.toLowerCase(), id: { not: userId } } : null,
+      dto.phone ? { phone: dto.phone, id: { not: userId } } : null,
+    ].filter(Boolean) as Array<{
+      email?: string;
+      id: { not: string };
+      phone?: string;
+    }>;
+
+    if (uniqueChecks.length) {
+      const existingUser = await this.prisma.user.findFirst({ where: { OR: uniqueChecks } });
+
+      if (existingUser) {
+        throw new ConflictException('User email or phone is already used.');
+      }
+    }
+
+    const updated = await this.prisma.user.update({
+      data: {
+        email: dto.email?.toLowerCase(),
+        name: dto.name,
+        passwordHash: dto.password ? await argon2.hash(dto.password) : undefined,
+        phone: dto.phone,
+        role: dto.role,
+        status: dto.status,
+      },
+      select: {
+        createdAt: true,
+        email: true,
+        id: true,
+        name: true,
+        phone: true,
+        role: true,
+        status: true,
+      },
+      where: { id: userId },
+    });
+
+    await this.prisma.auditEvent.create({
+      data: {
+        action: 'user_updated',
+        after: this.toJson(updated),
+        before: this.toJson(before),
+        entityId: userId,
+        entityType: 'user',
+        mandalId,
+      },
+    });
+
+    return updated;
+  }
+
+  private serializeAdmin(admin: {
+    createdAt: Date;
+    email: string | null;
+    id: string;
+    name: string;
+    phone: string | null;
+    role: UserRole;
+    status: AccountStatus;
+  }) {
+    return {
+      createdAt: admin.createdAt,
+      email: admin.email,
+      id: admin.id,
+      name: admin.name,
+      phone: admin.phone,
+      role: admin.role,
+      status: admin.status,
+    };
+  }
+
+  private toJson(value: unknown): JsonWriteValue {
+    return value as JsonWriteValue;
+  }
+
+  private async ensureMandalExists(id: string) {
+    const mandal = await this.prisma.mandal.findUnique({
+      select: { id: true },
+      where: { id },
+    });
+
+    if (!mandal) {
+      throw new NotFoundException('Mandal not found.');
+    }
+
+    return mandal;
+  }
+}

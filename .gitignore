@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+
+# next
+.next/
+out/
+
+# build
+dist/
+build/
+
+# env
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+
+# mac
+.DS_Store
+
+# vscode
+.vscode/
+
+# idea
+.idea/
+
+# coverage
+coverage/
+
+# cache
+.cache/

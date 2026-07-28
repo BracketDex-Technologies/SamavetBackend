@@ -1,0 +1,34 @@
+{
+  "name": "digital-mandal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production platform for Digital Mandal festival management and Digital Vargani.",
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "prebuild": "pnpm db:generate",
+    "build": "pnpm -r build",
+    "dev": "pnpm --filter @digital-mandal/web dev",
+    "dev:api": "pnpm --filter @digital-mandal/api start:dev",
+    "dev:web": "pnpm --filter @digital-mandal/web dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter @digital-mandal/database prisma:generate",
+    "db:migrate": "pnpm --filter @digital-mandal/database prisma:migrate",
+    "db:studio": "pnpm --filter @digital-mandal/database prisma:studio",
+    "demo:seed:akhilnayak": "node --env-file=.env scripts/seed-akhilnayak-demo.cjs",
+    "demo:verify:akhilnayak": "node --env-file=.env scripts/verify-akhilnayak-demo.cjs",
+    "db:verify:tables": "node scripts/verify-supabase-tables.cjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "@types/node": "^24.1.0",
+    "eslint": "^9.32.0",
+    "globals": "^16.3.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.38.0"
+  }
+}

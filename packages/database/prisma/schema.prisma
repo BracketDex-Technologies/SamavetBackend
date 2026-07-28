@@ -1,0 +1,466 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  MANDAL_ADMIN
+  KHAJINDAR
+  GROUP_LEADER
+  MEMBER
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum FestivalStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum TemplateStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  DROPDOWN
+  CHECKBOX
+  LONG_TEXT
+}
+
+enum PaymentMode {
+  CASH
+  UPI
+  CHEQUE
+  BANK_TRANSFER
+  OTHER
+}
+
+enum SlipStatus {
+  ACTIVE
+  PENDING
+  CANCELLED
+  CORRECTED
+}
+
+enum RenderStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum ExpenseStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Mandal {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  slug         String        @unique
+  logoUrl      String?       @map("logo_url")
+  address      String?
+  locality     String?
+  city         String?
+  state        String?
+  contactName  String?       @map("contact_name")
+  contactPhone String?       @map("contact_phone")
+  status       AccountStatus @default(ACTIVE)
+  plan         String        @default("starter")
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  users        User[]
+  festivals    Festival[]
+  groups       MemberGroup[]
+  members      Member[]
+  templates    SlipTemplate[]
+  customFields CustomField[]
+  slips        VarganiSlip[]
+  expenses     Expense[]
+  tasks        FestivalTask[]
+  auditEvents  AuditEvent[]
+  jobs         BackgroundJob[]
+
+  @@map("mandals")
+}
+
+model User {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId     String?       @map("mandal_id") @db.Uuid
+  name         String
+  phone        String?
+  email        String?
+  passwordHash String        @map("password_hash")
+  role         UserRole
+  status       AccountStatus @default(ACTIVE)
+  lastLoginAt  DateTime?     @map("last_login_at") @db.Timestamptz(6)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mandal           Mandal?        @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  memberProfiles   Member[]
+  collectedSlips   VarganiSlip[]  @relation("SlipCollector")
+  createdExpenses  Expense[]      @relation("ExpenseCreator")
+  approvedExpenses Expense[]      @relation("ExpenseApprover")
+  assignedTasks    FestivalTask[] @relation("TaskAssignee")
+  createdTasks     FestivalTask[] @relation("TaskCreator")
+  auditEvents      AuditEvent[]
+  ledGroups        MemberGroup[]  @relation("GroupLeader")
+  sessions         UserSession[]
+
+  @@unique([phone])
+  @@unique([email])
+  @@index([mandalId, role])
+  @@map("users")
+}
+
+model UserSession {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  refreshTokenHash String    @map("refresh_token_hash")
+  userAgent        String?   @map("user_agent")
+  ipAddress        String?   @map("ip_address")
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([id, userId, revokedAt, expiresAt])
+  @@map("user_sessions")
+}
+
+model Festival {
+  id                      String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId                String         @map("mandal_id") @db.Uuid
+  name                    String
+  type                    String
+  startDate               DateTime       @map("start_date") @db.Date
+  endDate                 DateTime       @map("end_date") @db.Date
+  targetAmount            Decimal?       @map("target_amount") @db.Decimal(14, 2)
+  status                  FestivalStatus @default(DRAFT)
+  activeTemplateVersionId String?        @map("active_template_version_id") @db.Uuid
+  createdAt               DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mandal                Mandal               @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  activeTemplateVersion SlipTemplateVersion? @relation("ActiveFestivalTemplate", fields: [activeTemplateVersionId], references: [id], onDelete: SetNull)
+  groups                MemberGroup[]
+  members               Member[]
+  templates             SlipTemplate[]
+  customFields          CustomField[]
+  slips                 VarganiSlip[]
+  expenses              Expense[]
+  tasks                 FestivalTask[]
+  slipSequence          SlipSequence?
+
+  @@index([mandalId, status])
+  @@map("festivals")
+}
+
+model MemberGroup {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId     String   @map("mandal_id") @db.Uuid
+  festivalId   String   @map("festival_id") @db.Uuid
+  name         String
+  leaderUserId String?  @map("leader_user_id") @db.Uuid
+  areaName     String?  @map("area_name")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mandal   Mandal        @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  festival Festival      @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+  leader   User?         @relation("GroupLeader", fields: [leaderUserId], references: [id], onDelete: SetNull)
+  members  Member[]
+  slips    VarganiSlip[]
+
+  @@index([mandalId, festivalId])
+  @@map("member_groups")
+}
+
+model Member {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId    String        @map("mandal_id") @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  festivalId  String        @map("festival_id") @db.Uuid
+  groupId     String?       @map("group_id") @db.Uuid
+  displayName String        @map("display_name")
+  phone       String?
+  areaName    String?       @map("area_name")
+  status      AccountStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mandal   Mandal       @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  user     User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  festival Festival     @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+  group    MemberGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@unique([mandalId, festivalId, userId])
+  @@index([mandalId, festivalId, groupId])
+  @@map("members")
+}
+
+model SlipTemplate {
+  id         String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId   String         @map("mandal_id") @db.Uuid
+  festivalId String?        @map("festival_id") @db.Uuid
+  name       String
+  status     TemplateStatus @default(DRAFT)
+  createdBy  String?        @map("created_by") @db.Uuid
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mandal   Mandal                @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  festival Festival?             @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+  versions SlipTemplateVersion[]
+
+  @@index([mandalId, festivalId])
+  @@map("slip_templates")
+}
+
+model SlipTemplateVersion {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  templateId        String   @map("template_id") @db.Uuid
+  version           Int
+  backgroundFileUrl String   @map("background_file_url")
+  canvasWidth       Int      @map("canvas_width")
+  canvasHeight      Int      @map("canvas_height")
+  renderConfig      Json     @map("render_config_json")
+  isActive          Boolean  @default(false) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  template        SlipTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  activeFestivals Festival[]    @relation("ActiveFestivalTemplate")
+  slips           VarganiSlip[]
+
+  @@unique([templateId, version])
+  @@index([templateId, isActive])
+  @@map("slip_template_versions")
+}
+
+model CustomField {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId        String          @map("mandal_id") @db.Uuid
+  festivalId      String          @map("festival_id") @db.Uuid
+  key             String
+  label           String
+  type            CustomFieldType
+  required        Boolean         @default(false)
+  options         Json?           @map("options_json")
+  printOnSlip     Boolean         @default(true) @map("print_on_slip")
+  dashboardFilter Boolean         @default(false) @map("dashboard_filter")
+  sortOrder       Int             @default(0) @map("sort_order")
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mandal   Mandal   @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  festival Festival @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+
+  @@unique([mandalId, festivalId, key])
+  @@index([mandalId, festivalId, sortOrder])
+  @@map("custom_fields")
+}
+
+model SlipSequence {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId     String   @map("mandal_id") @db.Uuid
+  festivalId   String   @unique @map("festival_id") @db.Uuid
+  currentValue BigInt   @default(0) @map("current_value")
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  festival Festival @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+
+  @@unique([mandalId, festivalId])
+  @@map("slip_sequences")
+}
+
+model VarganiSlip {
+  id                        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId                  String       @map("mandal_id") @db.Uuid
+  festivalId                String       @map("festival_id") @db.Uuid
+  templateVersionId         String?      @map("template_version_id") @db.Uuid
+  slipNumber                String       @map("slip_number")
+  contributorName           String       @map("contributor_name")
+  contributorPhone          String?      @map("contributor_phone")
+  contributorAddress        String?      @map("contributor_address")
+  shopName                  String?      @map("shop_name")
+  amount                    Decimal      @db.Decimal(14, 2)
+  paymentMode               PaymentMode  @map("payment_mode")
+  collectedByUserId         String       @map("collected_by_user_id") @db.Uuid
+  groupId                   String?      @map("group_id") @db.Uuid
+  areaName                  String?      @map("area_name")
+  status                    SlipStatus   @default(ACTIVE)
+  renderStatus              RenderStatus @default(PENDING) @map("render_status")
+  customData                Json         @default("{}") @map("custom_data_json")
+  receiptPdfUrl             String?      @map("receipt_pdf_url")
+  receiptImageUrl           String?      @map("receipt_image_url")
+  publicShareTokenHash      String?      @map("public_share_token_hash")
+  publicShareTokenExpiresAt DateTime?    @map("public_share_token_expires_at") @db.Timestamptz(6)
+  idempotencyKey            String?      @unique @map("idempotency_key")
+  createdAt                 DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  cancelledAt               DateTime?    @map("cancelled_at") @db.Timestamptz(6)
+  cancellationReason        String?      @map("cancellation_reason")
+
+  mandal          Mandal               @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  festival        Festival             @relation(fields: [festivalId], references: [id], onDelete: Restrict)
+  templateVersion SlipTemplateVersion? @relation(fields: [templateVersionId], references: [id], onDelete: SetNull)
+  collector       User                 @relation("SlipCollector", fields: [collectedByUserId], references: [id], onDelete: Restrict)
+  group           MemberGroup?         @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@unique([mandalId, festivalId, slipNumber])
+  @@index([mandalId, festivalId, createdAt])
+  @@index([mandalId, festivalId, status, createdAt])
+  @@index([mandalId, festivalId, paymentMode, createdAt])
+  @@index([mandalId, festivalId, areaName, createdAt])
+  @@index([mandalId, festivalId, collectedByUserId, createdAt])
+  @@index([mandalId, festivalId, groupId, createdAt])
+  @@index([publicShareTokenHash])
+  @@index([publicShareTokenExpiresAt])
+  @@map("vargani_slips")
+}
+
+model ExpenseCategory {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId  String   @map("mandal_id") @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  expenses Expense[]
+
+  @@unique([mandalId, name])
+  @@map("expense_categories")
+}
+
+model Expense {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId    String        @map("mandal_id") @db.Uuid
+  festivalId  String        @map("festival_id") @db.Uuid
+  categoryId  String?       @map("category_id") @db.Uuid
+  amount      Decimal       @db.Decimal(14, 2)
+  vendorName  String?       @map("vendor_name")
+  expenseDate DateTime      @map("expense_date") @db.Date
+  notes       String?
+  billFileUrl String?       @map("bill_file_url")
+  status      ExpenseStatus @default(DRAFT)
+  createdBy   String        @map("created_by") @db.Uuid
+  approvedBy  String?       @map("approved_by") @db.Uuid
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mandal   Mandal           @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  festival Festival         @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+  category ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  creator  User             @relation("ExpenseCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  approver User?            @relation("ExpenseApprover", fields: [approvedBy], references: [id], onDelete: SetNull)
+
+  @@index([mandalId, festivalId, expenseDate])
+  @@index([mandalId, festivalId, status, expenseDate])
+  @@map("expenses")
+}
+
+model FestivalTask {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId       String       @map("mandal_id") @db.Uuid
+  festivalId     String       @map("festival_id") @db.Uuid
+  title          String
+  notes          String?
+  assigneeUserId String?      @map("assignee_user_id") @db.Uuid
+  dueDate        DateTime?    @map("due_date") @db.Date
+  status         TaskStatus   @default(OPEN)
+  priority       TaskPriority @default(MEDIUM)
+  createdBy      String       @map("created_by") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mandal   Mandal   @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  festival Festival @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+  assignee User?    @relation("TaskAssignee", fields: [assigneeUserId], references: [id], onDelete: SetNull)
+  creator  User     @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([mandalId, festivalId, status, dueDate])
+  @@index([assigneeUserId, status])
+  @@map("festival_tasks")
+}
+
+model BackgroundJob {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId     String?   @map("mandal_id") @db.Uuid
+  type         String
+  status       String    @default("QUEUED")
+  payload      Json      @default("{}")
+  attempts     Int       @default(0)
+  maxAttempts  Int       @default(3) @map("max_attempts")
+  runAfter     DateTime  @default(now()) @map("run_after") @db.Timestamptz(6)
+  startedAt    DateTime? @map("started_at") @db.Timestamptz(6)
+  completedAt  DateTime? @map("completed_at") @db.Timestamptz(6)
+  failedAt     DateTime? @map("failed_at") @db.Timestamptz(6)
+  lockedAt     DateTime? @map("locked_at") @db.Timestamptz(6)
+  lockedBy     String?   @map("locked_by")
+  lastError    String?   @map("last_error")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mandal Mandal? @relation(fields: [mandalId], references: [id], onDelete: SetNull)
+
+  @@index([status, runAfter, createdAt])
+  @@index([mandalId, status, createdAt])
+  @@map("background_jobs")
+}
+
+model AuditEvent {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId    String?  @map("mandal_id") @db.Uuid
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  entityType  String   @map("entity_type")
+  entityId    String   @map("entity_id")
+  action      String
+  before      Json?    @map("before_json")
+  after       Json?    @map("after_json")
+  metadata    Json?    @map("metadata_json")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  mandal Mandal? @relation(fields: [mandalId], references: [id], onDelete: SetNull)
+  actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([mandalId, entityType, entityId])
+  @@index([mandalId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("audit_events")
+}

@@ -5,8 +5,8 @@
   "description": "Production platform for Digital Mandal festival management and Digital Vargani.",
   "packageManager": "pnpm@9.12.0",
   "scripts": {
-    "prebuild": "pnpm db:generate",
-    "build": "pnpm -r build",
+    "build": "pnpm --filter @digital-mandal/api build",
+    "build:all": "pnpm -r build",
     "dev": "pnpm --filter @digital-mandal/web dev",
     "dev:api": "pnpm --filter @digital-mandal/api start:dev",
     "dev:web": "pnpm --filter @digital-mandal/web dev",

@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "installCommand": "pnpm install --frozen-lockfile=false",
+  "installCommand": "pnpm install --frozen-lockfile=false --prod=false",
   "buildCommand": "pnpm --filter @digital-mandal/api build",
   "functions": {
     "api/index.ts": {

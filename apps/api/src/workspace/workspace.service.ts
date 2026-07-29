@@ -24,8 +24,8 @@ export class WorkspaceService {
     if (ctx.role === UserRole.SUPER_ADMIN) {
       const [totalMandals, totalMembers, totalSlips] = await this.prisma.$transaction([
         this.prisma.mandal.count({ where: { status: AccountStatus.ACTIVE } }),
-        this.prisma.member.count({ where: { status: AccountStatus.ACTIVE } }),
-        this.prisma.varganiSlip.count({ where: { status: SlipStatus.ACTIVE } }),
+        this.prisma.member.count({ where: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } } }),
+        this.prisma.varganiSlip.count({ where: { mandal: { status: AccountStatus.ACTIVE }, status: SlipStatus.ACTIVE } }),
       ]);
 
       return {
@@ -111,14 +111,23 @@ export class WorkspaceService {
   private async bootstrapOwner(ctx: AuthContext) {
     await this.ensureOwnerMandalsReady(ctx.userId);
 
+    const visibleOwnerUserWhere: Prisma.UserWhereInput = {
+      status: AccountStatus.ACTIVE,
+      OR: [
+        { role: { notIn: [UserRole.MEMBER, UserRole.GROUP_LEADER] } },
+        { memberProfiles: { some: { status: AccountStatus.ACTIVE } } },
+        { memberProfiles: { none: {} } },
+      ],
+    };
+
     const [mandalRows, totalMandals, totalMembers, totalSlips] = await this.prisma.$transaction([
       this.prisma.mandal.findMany({
         include: {
           _count: {
             select: {
-              members: true,
+              members: { where: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } } },
               slips: true,
-              users: true,
+              users: { where: visibleOwnerUserWhere },
             },
           },
           users: {
@@ -133,6 +142,7 @@ export class WorkspaceService {
               role: true,
               status: true,
             },
+            where: visibleOwnerUserWhere,
           },
           festivals: {
             orderBy: { startDate: 'desc' },
@@ -162,8 +172,8 @@ export class WorkspaceService {
         where: { status: AccountStatus.ACTIVE },
       }),
       this.prisma.mandal.count({ where: { status: AccountStatus.ACTIVE } }),
-      this.prisma.member.count({ where: { status: AccountStatus.ACTIVE } }),
-      this.prisma.varganiSlip.count({ where: { status: SlipStatus.ACTIVE } }),
+      this.prisma.member.count({ where: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } } }),
+      this.prisma.varganiSlip.count({ where: { mandal: { status: AccountStatus.ACTIVE }, status: SlipStatus.ACTIVE } }),
     ]);
 
     return {

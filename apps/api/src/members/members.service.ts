@@ -130,17 +130,28 @@ export class MembersService {
       throw new ConflictException('Invalid mandal member role.');
     }
 
+    const uniqueChecks = [
+      dto.email ? { email: dto.email.toLowerCase() } : null,
+      dto.phone ? { phone: dto.phone } : null,
+    ].filter(Boolean) as Array<{ email?: string; phone?: string }>;
+
     const existingUser = await this.prisma.user.findFirst({
-      where: {
-        OR: [{ email: dto.email?.toLowerCase() }, { phone: dto.phone }],
-      },
+      include: { memberProfiles: { select: { status: true } } },
+      where: { OR: uniqueChecks },
     });
 
-    if (existingUser) {
+    if (existingUser && !this.canReclaimLogin(existingUser)) {
       throw new ConflictException('Member email or phone already exists.');
     }
 
     return this.prisma.$transaction(async (tx) => {
+      if (existingUser) {
+        await this.hardDeleteUser(tx, {
+          mandalId: existingUser.mandalId,
+          userId: existingUser.id,
+        });
+      }
+
       const user = await tx.user.create({
         data: {
           email: dto.email?.toLowerCase(),
@@ -329,24 +340,9 @@ export class MembersService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.memberGroup.updateMany({
-        data: { leaderUserId: null },
-        where: { festivalId, leaderUserId: before.userId, mandalId },
-      });
-
-      await tx.member.update({
-        data: { groupId: null, status: AccountStatus.ARCHIVED },
-        where: { id: memberId },
-      });
-
-      await tx.user.update({
-        data: { status: AccountStatus.SUSPENDED },
-        where: { id: before.userId },
-      });
-
       await tx.auditEvent.create({
         data: {
-          action: 'member_archived',
+          action: 'member_deleted',
           actorUserId: ctx.userId,
           before: this.toJson(before),
           entityId: memberId,
@@ -354,9 +350,76 @@ export class MembersService {
           mandalId,
         },
       });
+
+      await tx.memberGroup.updateMany({
+        data: { leaderUserId: null },
+        where: { festivalId, leaderUserId: before.userId, mandalId },
+      });
+
+      await this.hardDeleteUser(tx, {
+        mandalId,
+        userId: before.userId,
+      });
     });
 
-    return { archived: true, id: memberId };
+    return { deleted: true, id: memberId };
+  }
+
+  private canReclaimLogin(user: {
+    memberProfiles: Array<{ status: AccountStatus }>;
+    role: UserRole;
+    status: AccountStatus;
+  }) {
+    if (user.status !== AccountStatus.ACTIVE) return true;
+    const isCollectionLogin = user.role === UserRole.MEMBER || user.role === UserRole.GROUP_LEADER;
+    const hasActiveMemberProfile = user.memberProfiles.some((profile) => profile.status === AccountStatus.ACTIVE);
+    return isCollectionLogin && !hasActiveMemberProfile;
+  }
+
+  private async hardDeleteUser(
+    tx: Prisma.TransactionClient,
+    params: { mandalId?: string | null; userId: string },
+  ) {
+    const mandalFilter = params.mandalId ? { mandalId: params.mandalId } : {};
+
+    await tx.memberGroup.updateMany({
+      data: { leaderUserId: null },
+      where: { leaderUserId: params.userId, ...mandalFilter },
+    });
+
+    await tx.festivalTask.updateMany({
+      data: { assigneeUserId: null },
+      where: { assigneeUserId: params.userId, ...mandalFilter },
+    });
+
+    await tx.expense.updateMany({
+      data: { approvedBy: null },
+      where: { approvedBy: params.userId, ...mandalFilter },
+    });
+
+    await tx.varganiSlip.deleteMany({
+      where: { collectedByUserId: params.userId, ...mandalFilter },
+    });
+
+    await tx.festivalTask.deleteMany({
+      where: { createdBy: params.userId, ...mandalFilter },
+    });
+
+    await tx.expense.deleteMany({
+      where: { createdBy: params.userId, ...mandalFilter },
+    });
+
+    await tx.userSession.deleteMany({
+      where: { userId: params.userId },
+    });
+
+    await tx.member.deleteMany({
+      where: { userId: params.userId, ...mandalFilter },
+    });
+
+    await tx.user.delete({
+      where: { id: params.userId },
+    });
   }
 
   private async assignGroupLeader(

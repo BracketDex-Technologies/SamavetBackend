@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import compression from 'compression';
+import { json, urlencoded } from 'express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AppConfig } from './config/app-config';
@@ -10,6 +11,7 @@ import { AppConfig } from './config/app-config';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     abortOnError: false,
+    bodyParser: false,
     bufferLogs: true,
   });
 
@@ -26,6 +28,8 @@ async function bootstrap() {
   });
   app.use(helmet());
   app.use(compression());
+  app.use(json({ limit: '10mb' }));
+  app.use(urlencoded({ extended: true, limit: '10mb' }));
   app.enableCors({
     credentials: true,
     origin: corsOrigins,
@@ -47,8 +51,7 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup(`${globalPrefix}/docs`, app, document);
 
-  const port = process.env.PORT || config.get('API_PORT', { infer: true });
-await app.listen(Number(port));
+  await app.listen(config.get('API_PORT', { infer: true }));
 }
 
 void bootstrap();

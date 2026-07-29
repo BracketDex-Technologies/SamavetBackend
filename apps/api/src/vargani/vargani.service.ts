@@ -30,6 +30,10 @@ interface SequenceRow {
 
 type JsonWriteValue = never;
 
+function isCollectorRole(role: UserRole) {
+  return role === UserRole.MEMBER || role === UserRole.GROUP_LEADER;
+}
+
 interface SlipListWhere {
   collectedByUserId?: string;
   festivalId: string;
@@ -114,7 +118,7 @@ export class VarganiService {
       where: { festivalId: festival.id, mandalId, userId: ctx.userId },
     });
 
-    if (!member && ctx.role === UserRole.MEMBER) {
+    if (!member && isCollectorRole(ctx.role)) {
       throw new ForbiddenException('Member is not assigned to the active festival.');
     }
 
@@ -219,7 +223,7 @@ export class VarganiService {
       mandalId,
     };
 
-    if (ctx.role === UserRole.MEMBER) {
+    if (isCollectorRole(ctx.role)) {
       where.collectedByUserId = ctx.userId;
     }
 
@@ -259,7 +263,7 @@ export class VarganiService {
       where: { id, mandalId },
     });
 
-    if (!slip || (ctx.role === UserRole.MEMBER && slip.collectedByUserId !== ctx.userId)) {
+    if (!slip || (isCollectorRole(ctx.role) && slip.collectedByUserId !== ctx.userId)) {
       throw new NotFoundException('Slip not found.');
     }
 
@@ -565,6 +569,10 @@ export class VarganiService {
       throw new NotFoundException('Slip not found.');
     }
 
+    if (isCollectorRole(ctx.role) && slip.collectedByUserId !== ctx.userId) {
+      throw new ForbiddenException('Collectors can cancel only their own slips.');
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.varganiSlip.update({
         data: {
@@ -599,8 +607,8 @@ export class VarganiService {
       throw new NotFoundException('Slip not found.');
     }
 
-    if (ctx.role === UserRole.MEMBER && slip.collectedByUserId !== ctx.userId) {
-      throw new ForbiddenException('Members can update only their own slips.');
+    if (isCollectorRole(ctx.role) && slip.collectedByUserId !== ctx.userId) {
+      throw new ForbiddenException('Collectors can update only their own slips.');
     }
 
     if (slip.status === SlipStatus.CANCELLED) {

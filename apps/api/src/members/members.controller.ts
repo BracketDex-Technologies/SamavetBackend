@@ -8,6 +8,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { CreateMemberDto } from './dto/create-member.dto';
+import { UpdateGroupDto } from './dto/update-group.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
 import { MembersService } from './members.service';
 
@@ -37,6 +38,18 @@ export class MembersController {
     @Param('festivalId') festivalId: string,
   ) {
     return this.membersService.listGroups(ctx, mandalId, festivalId);
+  }
+
+  @Patch('groups/:groupId')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR)
+  updateGroup(
+    @AuthUser() ctx: AuthContext,
+    @Param('mandalId') mandalId: string,
+    @Param('festivalId') festivalId: string,
+    @Param('groupId') groupId: string,
+    @Body() dto: UpdateGroupDto,
+  ) {
+    return this.membersService.updateGroup(ctx, mandalId, festivalId, groupId, dto);
   }
 
   @Post('members')

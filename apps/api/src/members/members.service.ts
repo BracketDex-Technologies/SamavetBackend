@@ -6,6 +6,7 @@ import { assertSameMandal } from '../auth/tenant-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { CreateMemberDto } from './dto/create-member.dto';
+import { UpdateGroupDto } from './dto/update-group.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
 
 type JsonWriteValue = never;
@@ -24,6 +25,7 @@ export class MembersService {
     assertSameMandal(ctx, mandalId);
 
     return this.prisma.memberGroup.create({
+      include: this.groupInclude(),
       data: {
         areaName: dto.areaName,
         festivalId,
@@ -38,13 +40,63 @@ export class MembersService {
     assertSameMandal(ctx, mandalId);
 
     return this.prisma.memberGroup.findMany({
-      include: {
-        leader: { select: { id: true, name: true, phone: true } },
-        _count: { select: { members: true, slips: true } },
-      },
+      include: this.groupInclude(),
       orderBy: { name: 'asc' },
       where: { festivalId, mandalId },
     });
+  }
+
+  async updateGroup(
+    ctx: AuthContext,
+    mandalId: string,
+    festivalId: string,
+    groupId: string,
+    dto: UpdateGroupDto,
+  ) {
+    assertSameMandal(ctx, mandalId);
+
+    const before = await this.prisma.memberGroup.findFirst({
+      where: { festivalId, id: groupId, mandalId },
+    });
+
+    if (!before) {
+      throw new NotFoundException('Group not found.');
+    }
+
+    if (dto.leaderUserId) {
+      const leader = await this.prisma.member.findFirst({
+        where: { festivalId, mandalId, userId: dto.leaderUserId },
+      });
+
+      if (!leader) {
+        throw new NotFoundException('Group leader must be a member of this mandal.');
+      }
+    }
+
+    const data: { areaName?: string | null; leaderUserId?: string | null; name?: string } = {};
+    if (Object.prototype.hasOwnProperty.call(dto, 'areaName')) data.areaName = dto.areaName || null;
+    if (Object.prototype.hasOwnProperty.call(dto, 'leaderUserId')) data.leaderUserId = dto.leaderUserId || null;
+    if (dto.name) data.name = dto.name;
+
+    const group = await this.prisma.memberGroup.update({
+      data,
+      include: this.groupInclude(),
+      where: { id: groupId },
+    });
+
+    await this.prisma.auditEvent.create({
+      data: {
+        action: 'group_updated',
+        actorUserId: ctx.userId,
+        after: this.toJson(group),
+        before: this.toJson(before),
+        entityId: group.id,
+        entityType: 'member_group',
+        mandalId,
+      },
+    });
+
+    return group;
   }
 
   async createMember(ctx: AuthContext, mandalId: string, festivalId: string, dto: CreateMemberDto) {
@@ -255,5 +307,23 @@ export class MembersService {
 
   private toJson(value: unknown): JsonWriteValue {
     return value as JsonWriteValue;
+  }
+
+  private groupInclude() {
+    return {
+      leader: { select: { id: true, name: true, phone: true } },
+      members: {
+        orderBy: { displayName: 'asc' as const },
+        select: {
+          areaName: true,
+          displayName: true,
+          id: true,
+          phone: true,
+          user: { select: { id: true, name: true, phone: true, role: true, status: true } },
+          userId: true,
+        },
+      },
+      _count: { select: { members: true, slips: true } },
+    };
   }
 }

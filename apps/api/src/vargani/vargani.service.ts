@@ -118,6 +118,20 @@ export class VarganiService {
       throw new ForbiddenException('Member is not assigned to the active festival.');
     }
 
+    let groupId = member?.groupId ?? null;
+    const canAssignGroup = ctx.role === UserRole.MANDAL_ADMIN || ctx.role === UserRole.KHAJINDAR;
+    if (dto.groupId && canAssignGroup) {
+      const group = await this.prisma.memberGroup.findFirst({
+        where: { festivalId: festival.id, id: dto.groupId, mandalId },
+      });
+
+      if (!group) {
+        throw new NotFoundException('Collection group not found.');
+      }
+
+      groupId = group.id;
+    }
+
     const customFields = await this.prisma.customField.findMany({
       where: { festivalId: festival.id, mandalId },
     });
@@ -154,7 +168,7 @@ export class VarganiService {
           contributorPhone: dto.contributorPhone,
           customData: toJsonWriteValue(dto.customData ?? {}),
           festivalId: festival.id,
-          groupId: member?.groupId,
+          groupId,
           idempotencyKey: dto.idempotencyKey,
           mandalId,
           paymentMode: dto.paymentMode,

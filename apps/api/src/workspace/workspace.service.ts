@@ -223,6 +223,7 @@ export class WorkspaceService {
       pendingSlipAmount,
       approvedExpenseAmount,
       paidCollectors,
+      collectionSlips,
       memberTotal,
       users,
       auditEvents,
@@ -238,6 +239,17 @@ export class WorkspaceService {
       this.prisma.memberGroup.findMany({
         include: {
           leader: { select: { id: true, name: true, phone: true } },
+          members: {
+            orderBy: { displayName: 'asc' },
+            select: {
+              areaName: true,
+              displayName: true,
+              id: true,
+              phone: true,
+              user: { select: { id: true, name: true, phone: true, role: true, status: true } },
+              userId: true,
+            },
+          },
           _count: { select: { members: true, slips: true } },
         },
         orderBy: { name: 'asc' },
@@ -296,6 +308,18 @@ export class WorkspaceService {
           status: SlipStatus.ACTIVE,
         },
       }),
+      this.prisma.varganiSlip.findMany({
+        select: {
+          amount: true,
+          collectedByUserId: true,
+          groupId: true,
+        },
+        where: {
+          festivalId: activeFestival.id,
+          mandalId,
+          status: SlipStatus.ACTIVE,
+        },
+      }),
       this.prisma.member.count({ where: { festivalId: activeFestival.id, mandalId } }),
       this.prisma.user.findMany({
         orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
@@ -322,6 +346,35 @@ export class WorkspaceService {
     const totalCollection = Number(activeSlipAmount._sum.amount ?? 0);
     const totalExpenses = Number(approvedExpenseAmount._sum.amount ?? 0);
     const memberPaidCount = paidCollectors.length;
+    const groupStats = new Map<string, { collectionTotal: number; paidSlipCount: number }>();
+    const memberStats = new Map<string, { collectionTotal: number; paidSlipCount: number }>();
+
+    collectionSlips.forEach((slip) => {
+      const amount = Number(slip.amount ?? 0);
+      if (slip.groupId) {
+        const current = groupStats.get(slip.groupId) ?? { collectionTotal: 0, paidSlipCount: 0 };
+        groupStats.set(slip.groupId, {
+          collectionTotal: current.collectionTotal + amount,
+          paidSlipCount: current.paidSlipCount + 1,
+        });
+      }
+
+      const current = memberStats.get(slip.collectedByUserId) ?? { collectionTotal: 0, paidSlipCount: 0 };
+      memberStats.set(slip.collectedByUserId, {
+        collectionTotal: current.collectionTotal + amount,
+        paidSlipCount: current.paidSlipCount + 1,
+      });
+    });
+    const groupsWithStats = groups.map((group) => ({
+      ...group,
+      collectionTotal: groupStats.get(group.id)?.collectionTotal ?? 0,
+      paidSlipCount: groupStats.get(group.id)?.paidSlipCount ?? 0,
+    }));
+    const membersWithStats = members.map((member) => ({
+      ...member,
+      collectionTotal: memberStats.get(member.userId)?.collectionTotal ?? 0,
+      paidSlipCount: memberStats.get(member.userId)?.paidSlipCount ?? 0,
+    }));
 
     return {
       activeForm: {
@@ -341,10 +394,10 @@ export class WorkspaceService {
       auditEvents,
       festival: activeFestival,
       generatedAt: new Date().toISOString(),
-      groups,
+      groups: groupsWithStats,
       kind: 'MANDAL',
       mandal,
-      members,
+      members: membersWithStats,
       metrics: {
         balance: totalCollection - totalExpenses,
         memberPaidCount,
@@ -359,8 +412,18 @@ export class WorkspaceService {
       },
       report: {
         balance: totalCollection - totalExpenses,
-        byGroup: [],
-        byMember: [],
+        byGroup: groupsWithStats.map((group) => ({
+          groupId: group.id,
+          groupName: group.name,
+          slipCount: group.paidSlipCount,
+          totalAmount: group.collectionTotal,
+        })),
+        byMember: membersWithStats.map((member) => ({
+          memberId: member.id,
+          memberName: member.displayName,
+          slipCount: member.paidSlipCount,
+          totalAmount: member.collectionTotal,
+        })),
         byPaymentMode: [],
         slipCount: activeSlipAmount._count.id,
         totalCollection,

@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaymentMode, SlipStatus } from '@prisma/client';
-import { IsEnum, IsObject, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsEnum, IsObject, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
 export class CreateVarganiSlipDto {
   @ApiProperty({ example: 'Mahesh Traders' })
@@ -44,6 +44,11 @@ export class CreateVarganiSlipDto {
   @IsString()
   @MaxLength(160)
   areaName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  groupId?: string;
 
   @ApiPropertyOptional()
   @IsObject()

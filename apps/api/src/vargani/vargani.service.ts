@@ -462,6 +462,7 @@ export class VarganiService {
   ) {
     const template = slip.templateVersion;
     const renderConfig = template.renderConfig as TemplateRenderConfig;
+    const backgroundFileUrl = this.resolveTemplateBackgroundUrl(template.backgroundFileUrl);
     const fieldValues: Record<string, string> = {
       amount: Number(slip.amount).toLocaleString('en-IN'),
       amountWords: amountToIndianWords(Number(slip.amount)),
@@ -515,11 +516,31 @@ export class VarganiService {
 </head>
 <body>
   <main class="sheet">
-    <img class="background" src="${escapeHtml(template.backgroundFileUrl)}" alt="" />
+    <img class="background" src="${escapeHtml(backgroundFileUrl)}" alt="" />
     <section class="layer" aria-label="Receipt fields">${overlays}</section>
   </main>
 </body>
 </html>`;
+  }
+
+  private resolveTemplateBackgroundUrl(rawUrl: string) {
+    const webBaseUrl = this.config.get('PUBLIC_WEB_BASE_URL', { infer: true }).replace(/\/$/, '');
+    const fallbackUrl = `${webBaseUrl}/templates/default-vargani-receipt.svg`;
+    const value = rawUrl?.trim();
+
+    if (!value) return fallbackUrl;
+    if (value.startsWith('/')) return `${webBaseUrl}${value}`;
+
+    try {
+      const url = new URL(value);
+      const isLocalTemplateAsset =
+        ['localhost', '127.0.0.1'].includes(url.hostname) && url.pathname.startsWith('/templates/');
+      if (isLocalTemplateAsset) return `${webBaseUrl}${url.pathname}${url.search}`;
+    } catch {
+      return value;
+    }
+
+    return value;
   }
 
   async cancelSlip(ctx: AuthContext, id: string, dto: CancelSlipDto) {

@@ -1,10 +1,19 @@
 import { z } from 'zod';
 
+const defaultCorsOrigins = [
+  'http://localhost:3000',
+  'http://localhost:4000',
+  'http://localhost:5173',
+  'https://epawati.samavet.in',
+  'https://samavet-frontend.vercel.app',
+];
+
 const appConfigSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   API_PORT: z.coerce.number().int().positive().default(4000),
   API_GLOBAL_PREFIX: z.string().min(1).default('api'),
   PUBLIC_API_BASE_URL: z.string().default(''),
+  PUBLIC_WEB_BASE_URL: z.string().url().default('https://epawati.samavet.in'),
   DATABASE_URL: z.string().url(),
   DIRECT_URL: z.string().url().optional(),
   JWT_ACCESS_SECRET: z.string().min(32),
@@ -23,12 +32,17 @@ const appConfigSchema = z.object({
   SUPABASE_STORAGE_BUCKET: z.string().min(1).default('digital-vargani'),
   CORS_ORIGINS: z
     .string()
-    .default('http://localhost:3000,http://localhost:4000')
+    .default(defaultCorsOrigins.join(','))
     .transform((value) =>
-      value
-        .split(',')
-        .map((origin) => origin.trim())
-        .filter(Boolean),
+      Array.from(
+        new Set([
+          ...value
+            .split(',')
+            .map((origin) => origin.trim())
+            .filter(Boolean),
+          ...defaultCorsOrigins,
+        ]),
+      ),
     ),
 });
 

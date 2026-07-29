@@ -19,6 +19,11 @@ export class CreateTaskDto {
   @IsUUID()
   assigneeUserId?: string;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  groupId?: string;
+
   @ApiPropertyOptional({ example: '2026-08-18' })
   @IsOptional()
   @IsISO8601()

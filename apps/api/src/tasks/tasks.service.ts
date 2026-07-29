@@ -21,6 +21,7 @@ export class TasksService {
         createdBy: ctx.userId,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
         festivalId,
+        groupId: dto.groupId,
         mandalId,
         notes: dto.notes,
         priority: dto.priority ?? TaskPriority.MEDIUM,
@@ -65,6 +66,7 @@ export class TasksService {
       data: {
         assigneeUserId: dto.assigneeUserId,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+        groupId: dto.groupId,
         notes: dto.notes,
         priority: dto.priority,
         status: dto.status,
@@ -98,6 +100,7 @@ export class TasksService {
     return {
       assignee: { select: { email: true, id: true, name: true, phone: true, role: true } },
       creator: { select: { id: true, name: true, role: true } },
+      group: { select: { areaName: true, id: true, name: true } },
     };
   }
 

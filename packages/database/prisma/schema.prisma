@@ -209,6 +209,7 @@ model MemberGroup {
   leader   User?         @relation("GroupLeader", fields: [leaderUserId], references: [id], onDelete: SetNull)
   members  Member[]
   slips    VarganiSlip[]
+  tasks    FestivalTask[]
 
   @@index([mandalId, festivalId])
   @@map("member_groups")
@@ -402,6 +403,7 @@ model FestivalTask {
   title          String
   notes          String?
   assigneeUserId String?      @map("assignee_user_id") @db.Uuid
+  groupId        String?      @map("group_id") @db.Uuid
   dueDate        DateTime?    @map("due_date") @db.Date
   status         TaskStatus   @default(OPEN)
   priority       TaskPriority @default(MEDIUM)
@@ -413,8 +415,10 @@ model FestivalTask {
   festival Festival @relation(fields: [festivalId], references: [id], onDelete: Cascade)
   assignee User?    @relation("TaskAssignee", fields: [assigneeUserId], references: [id], onDelete: SetNull)
   creator  User     @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  group    MemberGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   @@index([mandalId, festivalId, status, dueDate])
+  @@index([mandalId, festivalId, groupId, status])
   @@index([assigneeUserId, status])
   @@map("festival_tasks")
 }

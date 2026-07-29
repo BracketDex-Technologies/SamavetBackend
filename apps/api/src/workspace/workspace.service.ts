@@ -76,7 +76,14 @@ export class WorkspaceService {
           select: { collectedByUserId: true },
           where: { festivalId: activeFestival.id, mandalId, status: SlipStatus.ACTIVE },
         }),
-        this.prisma.member.count({ where: { festivalId: activeFestival.id, mandalId } }),
+        this.prisma.member.count({
+          where: {
+            festivalId: activeFestival.id,
+            mandalId,
+            status: AccountStatus.ACTIVE,
+            user: { status: AccountStatus.ACTIVE },
+          },
+        }),
       ]);
 
     const totalCollection = Number(activeSlipAmount._sum.amount ?? 0);
@@ -224,6 +231,8 @@ export class WorkspaceService {
     const memberCountWhere: Prisma.MemberWhereInput = {
       festivalId: activeFestival.id,
       mandalId,
+      status: AccountStatus.ACTIVE,
+      user: { status: AccountStatus.ACTIVE },
       userId: isCollectorWorkspace ? ctx.userId : undefined,
     };
 
@@ -246,7 +255,13 @@ export class WorkspaceService {
     ] = await this.prisma.$transaction([
       this.prisma.member.findFirst({
         include: { group: true },
-        where: { festivalId: activeFestival.id, mandalId, userId: ctx.userId },
+        where: {
+          festivalId: activeFestival.id,
+          mandalId,
+          status: AccountStatus.ACTIVE,
+          user: { status: AccountStatus.ACTIVE },
+          userId: ctx.userId,
+        },
       }),
       this.prisma.customField.findMany({
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
@@ -265,14 +280,22 @@ export class WorkspaceService {
               user: { select: { id: true, name: true, phone: true, role: true, status: true } },
               userId: true,
             },
+            where: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } },
           },
-          _count: { select: { members: true, slips: true } },
+          _count: {
+            select: {
+              members: { where: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } } },
+              slips: true,
+            },
+          },
         },
         orderBy: { name: 'asc' },
         where: {
           festivalId: activeFestival.id,
           mandalId,
-          members: isCollectorWorkspace ? { some: { userId: ctx.userId } } : undefined,
+          members: isCollectorWorkspace
+            ? { some: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE }, userId: ctx.userId } }
+            : undefined,
         },
       }),
       this.prisma.member.findMany({
@@ -287,6 +310,8 @@ export class WorkspaceService {
         where: {
           festivalId: activeFestival.id,
           mandalId,
+          status: AccountStatus.ACTIVE,
+          user: { status: AccountStatus.ACTIVE },
           userId: isCollectorWorkspace ? ctx.userId : undefined,
         },
       }),
@@ -350,7 +375,9 @@ export class WorkspaceService {
           status: true,
         },
         take: 50,
-        where: isCollectorWorkspace ? { id: ctx.userId, mandalId } : { mandalId },
+        where: isCollectorWorkspace
+          ? { id: ctx.userId, mandalId, status: AccountStatus.ACTIVE }
+          : { mandalId, status: AccountStatus.ACTIVE },
       }),
       this.prisma.auditEvent.findMany({
         orderBy: { createdAt: 'desc' },
@@ -364,12 +391,16 @@ export class WorkspaceService {
     const memberPaidCount = paidCollectors.length;
     const groupStats = new Map<string, { collectionTotal: number; paidSlipCount: number }>();
     const memberStats = new Map<string, { collectionTotal: number; paidSlipCount: number }>();
+    const memberGroupByUser = new Map(members.map((member) => [member.userId, member.groupId]));
 
     collectionSlips.forEach((slip) => {
       const amount = Number(slip.amount ?? 0);
-      if (slip.groupId) {
-        const current = groupStats.get(slip.groupId) ?? { collectionTotal: 0, paidSlipCount: 0 };
-        groupStats.set(slip.groupId, {
+      const collectorHasMemberProfile = memberGroupByUser.has(slip.collectedByUserId);
+      const currentCollectorGroupId = memberGroupByUser.get(slip.collectedByUserId);
+      const groupId = collectorHasMemberProfile ? currentCollectorGroupId : slip.groupId;
+      if (groupId) {
+        const current = groupStats.get(groupId) ?? { collectionTotal: 0, paidSlipCount: 0 };
+        groupStats.set(groupId, {
           collectionTotal: current.collectionTotal + amount,
           paidSlipCount: current.paidSlipCount + 1,
         });
@@ -480,6 +511,8 @@ export class WorkspaceService {
           where: {
             festivalId,
             mandalId,
+            status: AccountStatus.ACTIVE,
+            user: { status: AccountStatus.ACTIVE },
             userId: group.leaderUserId,
           },
         });

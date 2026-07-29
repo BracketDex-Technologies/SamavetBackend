@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  AccountStatus,
   CustomFieldType,
   FestivalStatus,
   RenderStatus,
@@ -87,7 +88,13 @@ export class VarganiService {
     const [member, customFields] = await Promise.all([
       this.prisma.member.findFirst({
         include: { group: true },
-        where: { festivalId: festival.id, mandalId, userId: ctx.userId },
+        where: {
+          festivalId: festival.id,
+          mandalId,
+          status: AccountStatus.ACTIVE,
+          user: { status: AccountStatus.ACTIVE },
+          userId: ctx.userId,
+        },
       }),
       this.prisma.customField.findMany({
         orderBy: { sortOrder: 'asc' },
@@ -115,7 +122,13 @@ export class VarganiService {
     const mandalId = requireMandalId(ctx);
     const festival = await this.getActiveFestival(mandalId);
     const member = await this.prisma.member.findFirst({
-      where: { festivalId: festival.id, mandalId, userId: ctx.userId },
+      where: {
+        festivalId: festival.id,
+        mandalId,
+        status: AccountStatus.ACTIVE,
+        user: { status: AccountStatus.ACTIVE },
+        userId: ctx.userId,
+      },
     });
 
     if (!member && isCollectorRole(ctx.role)) {

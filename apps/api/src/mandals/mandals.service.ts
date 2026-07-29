@@ -230,7 +230,7 @@ export class MandalsService {
         role: true,
         status: true,
       },
-      where: { mandalId: id },
+      where: { mandalId: id, status: AccountStatus.ACTIVE },
     });
   }
 

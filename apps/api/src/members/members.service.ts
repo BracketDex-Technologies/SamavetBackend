@@ -202,7 +202,7 @@ export class MembersService {
         },
       },
       orderBy: { displayName: 'asc' },
-      where: { festivalId, mandalId },
+      where: { festivalId, mandalId, status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } },
     });
   }
 
@@ -328,16 +328,23 @@ export class MembersService {
       throw new NotFoundException('Member not found.');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.member.update({
-        data: { status: AccountStatus.ARCHIVED },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.memberGroup.updateMany({
+        data: { leaderUserId: null },
+        where: { festivalId, leaderUserId: before.userId, mandalId },
+      });
+
+      await tx.member.update({
+        data: { groupId: null, status: AccountStatus.ARCHIVED },
         where: { id: memberId },
-      }),
-      this.prisma.user.update({
+      });
+
+      await tx.user.update({
         data: { status: AccountStatus.SUSPENDED },
         where: { id: before.userId },
-      }),
-      this.prisma.auditEvent.create({
+      });
+
+      await tx.auditEvent.create({
         data: {
           action: 'member_archived',
           actorUserId: ctx.userId,
@@ -346,8 +353,8 @@ export class MembersService {
           entityType: 'member',
           mandalId,
         },
-      }),
-    ]);
+      });
+    });
 
     return { archived: true, id: memberId };
   }
@@ -379,6 +386,8 @@ export class MembersService {
       where: {
         festivalId: params.festivalId,
         mandalId: params.mandalId,
+        status: AccountStatus.ACTIVE,
+        user: { status: AccountStatus.ACTIVE },
         userId: params.leaderUserId,
       },
     });
@@ -453,8 +462,14 @@ export class MembersService {
           user: { select: { id: true, name: true, phone: true, role: true, status: true } },
           userId: true,
         },
+        where: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } },
       },
-      _count: { select: { members: true, slips: true } },
+      _count: {
+        select: {
+          members: { where: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } } },
+          slips: true,
+        },
+      },
     };
   }
 }

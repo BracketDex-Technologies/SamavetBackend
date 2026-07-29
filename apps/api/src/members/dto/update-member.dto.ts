@@ -42,7 +42,7 @@ export class UpdateMemberDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()
-  groupId?: string;
+  groupId?: string | null;
 
   @ApiPropertyOptional({ example: 'Laxmi Road' })
   @IsOptional()

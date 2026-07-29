@@ -205,6 +205,8 @@ export class WorkspaceService {
       activeFestival = setup.activeFestival;
     }
 
+    await this.repairGroupLeaderAssignments(mandalId, activeFestival.id);
+
     const isCollectorWorkspace = ctx.role === UserRole.MEMBER || ctx.role === UserRole.GROUP_LEADER;
     const visibleSlipWhere: Prisma.VarganiSlipWhereInput = {
       collectedByUserId: isCollectorWorkspace ? ctx.userId : undefined,
@@ -456,6 +458,69 @@ export class WorkspaceService {
       user: await this.getUser(ctx.userId),
       users,
     };
+  }
+
+  private async repairGroupLeaderAssignments(mandalId: string, festivalId: string) {
+    const groups = await this.prisma.memberGroup.findMany({
+      select: { id: true, leaderUserId: true },
+      where: {
+        festivalId,
+        leaderUserId: { not: null },
+        mandalId,
+      },
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      const validLeaderUserIds: string[] = [];
+
+      for (const group of groups) {
+        if (!group.leaderUserId) continue;
+
+        const leaderMember = await tx.member.findFirst({
+          where: {
+            festivalId,
+            mandalId,
+            userId: group.leaderUserId,
+          },
+        });
+
+        if (!leaderMember) {
+          await tx.memberGroup.update({
+            data: { leaderUserId: null },
+            where: { id: group.id },
+          });
+          continue;
+        }
+
+        validLeaderUserIds.push(group.leaderUserId);
+
+        if (leaderMember.groupId !== group.id) {
+          await tx.member.update({
+            data: { groupId: group.id },
+            where: { id: leaderMember.id },
+          });
+        }
+
+        await tx.user.update({
+          data: { role: UserRole.GROUP_LEADER },
+          where: { id: group.leaderUserId },
+        });
+      }
+
+      const downgradeWhere: Prisma.UserWhereInput = {
+        mandalId,
+        memberProfiles: { some: { festivalId, mandalId } },
+        role: UserRole.GROUP_LEADER,
+      };
+      if (validLeaderUserIds.length > 0) {
+        downgradeWhere.id = { notIn: validLeaderUserIds };
+      }
+
+      await tx.user.updateMany({
+        data: { role: UserRole.MEMBER },
+        where: downgradeWhere,
+      });
+    });
   }
 
   private getUser(userId: string) {

@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { AccountStatus, UserRole } from '@prisma/client';
+import { AccountStatus, Prisma, UserRole } from '@prisma/client';
 import argon2 from 'argon2';
 import { AuthContext } from '../auth/auth-context';
 import { assertSameMandal } from '../auth/tenant-scope';
@@ -24,15 +24,29 @@ export class MembersService {
   async createGroup(ctx: AuthContext, mandalId: string, festivalId: string, dto: CreateGroupDto) {
     assertSameMandal(ctx, mandalId);
 
-    return this.prisma.memberGroup.create({
-      include: this.groupInclude(),
-      data: {
-        areaName: dto.areaName,
-        festivalId,
-        leaderUserId: dto.leaderUserId,
-        mandalId,
-        name: dto.name,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const group = await tx.memberGroup.create({
+        data: {
+          areaName: dto.areaName,
+          festivalId,
+          mandalId,
+          name: dto.name,
+        },
+      });
+
+      if (dto.leaderUserId) {
+        await this.assignGroupLeader(tx, {
+          festivalId,
+          groupId: group.id,
+          leaderUserId: dto.leaderUserId,
+          mandalId,
+        });
+      }
+
+      return tx.memberGroup.findUniqueOrThrow({
+        include: this.groupInclude(),
+        where: { id: group.id },
+      });
     });
   }
 
@@ -63,38 +77,46 @@ export class MembersService {
       throw new NotFoundException('Group not found.');
     }
 
-    if (dto.leaderUserId) {
-      const leader = await this.prisma.member.findFirst({
-        where: { festivalId, mandalId, userId: dto.leaderUserId },
-      });
-
-      if (!leader) {
-        throw new NotFoundException('Group leader must be a member of this mandal.');
-      }
-    }
-
-    const data: { areaName?: string | null; leaderUserId?: string | null; name?: string } = {};
+    const data: { areaName?: string | null; name?: string } = {};
     if (Object.prototype.hasOwnProperty.call(dto, 'areaName')) data.areaName = dto.areaName || null;
-    if (Object.prototype.hasOwnProperty.call(dto, 'leaderUserId')) data.leaderUserId = dto.leaderUserId || null;
     if (dto.name) data.name = dto.name;
 
-    const group = await this.prisma.memberGroup.update({
-      data,
-      include: this.groupInclude(),
-      where: { id: groupId },
+    const group = await this.prisma.$transaction(async (tx) => {
+      await tx.memberGroup.update({
+        data,
+        where: { id: groupId },
+      });
+
+      if (Object.prototype.hasOwnProperty.call(dto, 'leaderUserId')) {
+        await this.assignGroupLeader(tx, {
+          festivalId,
+          groupId,
+          leaderUserId: dto.leaderUserId || null,
+          mandalId,
+          previousLeaderUserId: before.leaderUserId,
+        });
+      }
+
+      const updatedGroup = await tx.memberGroup.findUniqueOrThrow({
+        include: this.groupInclude(),
+        where: { id: groupId },
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          action: 'group_updated',
+          actorUserId: ctx.userId,
+          after: this.toJson(updatedGroup),
+          before: this.toJson(before),
+          entityId: updatedGroup.id,
+          entityType: 'member_group',
+          mandalId,
+        },
+      });
+
+      return updatedGroup;
     });
 
-    await this.prisma.auditEvent.create({
-      data: {
-        action: 'group_updated',
-        actorUserId: ctx.userId,
-        after: this.toJson(group),
-        before: this.toJson(before),
-        entityId: group.id,
-        entityType: 'member_group',
-        mandalId,
-      },
-    });
 
     return group;
   }
@@ -102,7 +124,9 @@ export class MembersService {
   async createMember(ctx: AuthContext, mandalId: string, festivalId: string, dto: CreateMemberDto) {
     assertSameMandal(ctx, mandalId);
 
-    if (!allowedMemberRoles.has(dto.role)) {
+    const role = this.normalizeCreatedMemberRole(dto.role);
+
+    if (!allowedMemberRoles.has(role)) {
       throw new ConflictException('Invalid mandal member role.');
     }
 
@@ -124,7 +148,7 @@ export class MembersService {
           name: dto.name,
           passwordHash: await argon2.hash(dto.password),
           phone: dto.phone,
-          role: dto.role,
+          role,
           status: AccountStatus.ACTIVE,
         },
       });
@@ -191,7 +215,9 @@ export class MembersService {
   ) {
     assertSameMandal(ctx, mandalId);
 
-    if (dto.role && !allowedMemberRoles.has(dto.role)) {
+    const role = dto.role;
+
+    if (role && !allowedMemberRoles.has(role)) {
       throw new ConflictException('Invalid mandal member role.');
     }
 
@@ -228,7 +254,7 @@ export class MembersService {
           name: dto.name,
           passwordHash: dto.password ? await argon2.hash(dto.password) : undefined,
           phone: dto.phone,
-          role: dto.role,
+          role,
           status: dto.status,
         },
         where: { id: before.userId },
@@ -238,7 +264,7 @@ export class MembersService {
         data: {
           areaName: dto.areaName,
           displayName: dto.name,
-          groupId: dto.groupId,
+          groupId: Object.prototype.hasOwnProperty.call(dto, 'groupId') ? dto.groupId : undefined,
           phone: dto.phone,
           status: dto.status,
         },
@@ -250,6 +276,27 @@ export class MembersService {
         },
         where: { id: memberId },
       });
+
+      if (Object.prototype.hasOwnProperty.call(dto, 'groupId') && before.user.role === UserRole.GROUP_LEADER) {
+        const keepGroupId = member.groupId;
+        await tx.memberGroup.updateMany({
+          data: { leaderUserId: null },
+          where: {
+            festivalId,
+            leaderUserId: before.userId,
+            mandalId,
+            ...(keepGroupId ? { id: { not: keepGroupId } } : {}),
+          },
+        });
+      }
+
+      if (before.user.role === UserRole.GROUP_LEADER || dto.role === UserRole.GROUP_LEADER) {
+        await this.downgradeLeaderIfUnused(tx, {
+          festivalId,
+          mandalId,
+          userId: before.userId,
+        });
+      }
 
       await tx.auditEvent.create({
         data: {
@@ -303,6 +350,90 @@ export class MembersService {
     ]);
 
     return { archived: true, id: memberId };
+  }
+
+  private async assignGroupLeader(
+    tx: Prisma.TransactionClient,
+    params: {
+      festivalId: string;
+      groupId: string;
+      leaderUserId?: string | null;
+      mandalId: string;
+      previousLeaderUserId?: string | null;
+    },
+  ) {
+    if (!params.leaderUserId) {
+      await tx.memberGroup.update({
+        data: { leaderUserId: null },
+        where: { id: params.groupId },
+      });
+      await this.downgradeLeaderIfUnused(tx, {
+        festivalId: params.festivalId,
+        mandalId: params.mandalId,
+        userId: params.previousLeaderUserId,
+      });
+      return;
+    }
+
+    const leader = await tx.member.findFirst({
+      where: {
+        festivalId: params.festivalId,
+        mandalId: params.mandalId,
+        userId: params.leaderUserId,
+      },
+    });
+
+    if (!leader) {
+      throw new NotFoundException('Group leader must be a member of this mandal.');
+    }
+
+    await tx.member.update({
+      data: { groupId: params.groupId },
+      where: { id: leader.id },
+    });
+    await tx.user.update({
+      data: { role: UserRole.GROUP_LEADER },
+      where: { id: params.leaderUserId },
+    });
+    await tx.memberGroup.update({
+      data: { leaderUserId: params.leaderUserId },
+      where: { id: params.groupId },
+    });
+    await this.downgradeLeaderIfUnused(tx, {
+      festivalId: params.festivalId,
+      mandalId: params.mandalId,
+      userId: params.previousLeaderUserId,
+    });
+  }
+
+  private async downgradeLeaderIfUnused(
+    tx: Prisma.TransactionClient,
+    params: { festivalId: string; mandalId: string; userId?: string | null },
+  ) {
+    if (!params.userId) return;
+
+    const ledGroupCount = await tx.memberGroup.count({
+      where: {
+        festivalId: params.festivalId,
+        leaderUserId: params.userId,
+        mandalId: params.mandalId,
+      },
+    });
+
+    if (ledGroupCount > 0) return;
+
+    await tx.user.updateMany({
+      data: { role: UserRole.MEMBER },
+      where: {
+        id: params.userId,
+        mandalId: params.mandalId,
+        role: UserRole.GROUP_LEADER,
+      },
+    });
+  }
+
+  private normalizeCreatedMemberRole(role: UserRole) {
+    return role === UserRole.GROUP_LEADER ? UserRole.MEMBER : role;
   }
 
   private toJson(value: unknown): JsonWriteValue {

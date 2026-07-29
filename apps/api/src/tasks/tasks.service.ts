@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { TaskPriority, TaskStatus } from '@prisma/client';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { AccountStatus, Prisma, TaskPriority, TaskStatus, UserRole } from '@prisma/client';
 import { AuthContext } from '../auth/auth-context';
 import { assertSameMandal } from '../auth/tenant-scope';
 import { PrismaService } from '../prisma/prisma.service';
@@ -14,6 +14,7 @@ export class TasksService {
 
   async createTask(ctx: AuthContext, mandalId: string, festivalId: string, dto: CreateTaskDto) {
     assertSameMandal(ctx, mandalId);
+    this.assertCanManageTasks(ctx);
 
     const task = await this.prisma.festivalTask.create({
       data: {
@@ -37,11 +38,29 @@ export class TasksService {
 
   async listTasks(ctx: AuthContext, mandalId: string, festivalId: string) {
     assertSameMandal(ctx, mandalId);
+    const where: Prisma.FestivalTaskWhereInput = { festivalId, mandalId };
+
+    if (this.isCollector(ctx)) {
+      const member = await this.prisma.member.findFirst({
+        select: { groupId: true },
+        where: {
+          festivalId,
+          mandalId,
+          status: AccountStatus.ACTIVE,
+          user: { status: AccountStatus.ACTIVE },
+          userId: ctx.userId,
+        },
+      });
+      where.OR = [
+        { assigneeUserId: ctx.userId },
+        ...(member?.groupId ? [{ groupId: member.groupId }] : []),
+      ];
+    }
 
     return this.prisma.festivalTask.findMany({
       include: this.includeRelations(),
       orderBy: [{ status: 'asc' }, { dueDate: 'asc' }, { createdAt: 'desc' }],
-      where: { festivalId, mandalId },
+      where,
     });
   }
 
@@ -62,16 +81,22 @@ export class TasksService {
       throw new NotFoundException('Task not found.');
     }
 
+    if (this.isCollector(ctx)) {
+      await this.assertTaskVisibleToCollector(ctx, mandalId, festivalId, before.groupId, before.assigneeUserId);
+    }
+
     const task = await this.prisma.festivalTask.update({
-      data: {
-        assigneeUserId: dto.assigneeUserId,
-        dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-        groupId: dto.groupId,
-        notes: dto.notes,
-        priority: dto.priority,
-        status: dto.status,
-        title: dto.title,
-      },
+      data: this.isCollector(ctx)
+        ? { status: dto.status ?? before.status }
+        : {
+            assigneeUserId: dto.assigneeUserId,
+            dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+            groupId: dto.groupId,
+            notes: dto.notes,
+            priority: dto.priority,
+            status: dto.status,
+            title: dto.title,
+          },
       include: this.includeRelations(),
       where: { id: taskId },
     });
@@ -82,6 +107,7 @@ export class TasksService {
 
   async deleteTask(ctx: AuthContext, mandalId: string, festivalId: string, taskId: string) {
     assertSameMandal(ctx, mandalId);
+    this.assertCanManageTasks(ctx);
 
     const before = await this.prisma.festivalTask.findFirst({
       where: { festivalId, id: taskId, mandalId },
@@ -102,6 +128,45 @@ export class TasksService {
       creator: { select: { id: true, name: true, role: true } },
       group: { select: { areaName: true, id: true, name: true } },
     };
+  }
+
+  private assertCanManageTasks(ctx: AuthContext) {
+    if (this.isCollector(ctx)) {
+      throw new ForbiddenException('Only mandal admins can manage tasks.');
+    }
+  }
+
+  private async assertTaskVisibleToCollector(
+    ctx: AuthContext,
+    mandalId: string,
+    festivalId: string,
+    taskGroupId?: string | null,
+    assigneeUserId?: string | null,
+  ) {
+    if (assigneeUserId === ctx.userId) return;
+    if (!taskGroupId) {
+      throw new ForbiddenException('This task is not assigned to you.');
+    }
+
+    const member = await this.prisma.member.findFirst({
+      select: { id: true },
+      where: {
+        festivalId,
+        groupId: taskGroupId,
+        mandalId,
+        status: AccountStatus.ACTIVE,
+        user: { status: AccountStatus.ACTIVE },
+        userId: ctx.userId,
+      },
+    });
+
+    if (!member) {
+      throw new ForbiddenException('This task is not assigned to your group.');
+    }
+  }
+
+  private isCollector(ctx: AuthContext) {
+    return ctx.role === UserRole.MEMBER || ctx.role === UserRole.GROUP_LEADER;
   }
 
   private async audit(

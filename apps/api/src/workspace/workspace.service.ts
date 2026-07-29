@@ -205,10 +205,24 @@ export class WorkspaceService {
       activeFestival = setup.activeFestival;
     }
 
+    const isCollectorWorkspace = ctx.role === UserRole.MEMBER || ctx.role === UserRole.GROUP_LEADER;
     const visibleSlipWhere: Prisma.VarganiSlipWhereInput = {
-      collectedByUserId: ctx.role === UserRole.MEMBER ? ctx.userId : undefined,
+      collectedByUserId: isCollectorWorkspace ? ctx.userId : undefined,
       festivalId: activeFestival.id,
       mandalId,
+    };
+    const activeSlipWhere: Prisma.VarganiSlipWhereInput = {
+      ...visibleSlipWhere,
+      status: SlipStatus.ACTIVE,
+    };
+    const pendingSlipWhere: Prisma.VarganiSlipWhereInput = {
+      ...visibleSlipWhere,
+      status: SlipStatus.PENDING,
+    };
+    const memberCountWhere: Prisma.MemberWhereInput = {
+      festivalId: activeFestival.id,
+      mandalId,
+      userId: isCollectorWorkspace ? ctx.userId : undefined,
     };
 
     const [
@@ -253,7 +267,11 @@ export class WorkspaceService {
           _count: { select: { members: true, slips: true } },
         },
         orderBy: { name: 'asc' },
-        where: { festivalId: activeFestival.id, mandalId },
+        where: {
+          festivalId: activeFestival.id,
+          mandalId,
+          members: isCollectorWorkspace ? { some: { userId: ctx.userId } } : undefined,
+        },
       }),
       this.prisma.member.findMany({
         include: {
@@ -264,7 +282,11 @@ export class WorkspaceService {
         },
         orderBy: { displayName: 'asc' },
         take: 100,
-        where: { festivalId: activeFestival.id, mandalId },
+        where: {
+          festivalId: activeFestival.id,
+          mandalId,
+          userId: isCollectorWorkspace ? ctx.userId : undefined,
+        },
       }),
       this.prisma.slipTemplate.findMany({
         include: {
@@ -287,12 +309,12 @@ export class WorkspaceService {
       this.prisma.varganiSlip.aggregate({
         _count: { id: true },
         _sum: { amount: true },
-        where: { festivalId: activeFestival.id, mandalId, status: SlipStatus.ACTIVE },
+        where: activeSlipWhere,
       }),
       this.prisma.varganiSlip.aggregate({
         _count: { id: true },
         _sum: { amount: true },
-        where: { festivalId: activeFestival.id, mandalId, status: SlipStatus.PENDING },
+        where: pendingSlipWhere,
       }),
       this.prisma.expense.aggregate({
         _count: { id: true },
@@ -302,11 +324,7 @@ export class WorkspaceService {
       this.prisma.varganiSlip.findMany({
         distinct: ['collectedByUserId'],
         select: { collectedByUserId: true },
-        where: {
-          festivalId: activeFestival.id,
-          mandalId,
-          status: SlipStatus.ACTIVE,
-        },
+        where: activeSlipWhere,
       }),
       this.prisma.varganiSlip.findMany({
         select: {
@@ -314,13 +332,9 @@ export class WorkspaceService {
           collectedByUserId: true,
           groupId: true,
         },
-        where: {
-          festivalId: activeFestival.id,
-          mandalId,
-          status: SlipStatus.ACTIVE,
-        },
+        where: activeSlipWhere,
       }),
-      this.prisma.member.count({ where: { festivalId: activeFestival.id, mandalId } }),
+      this.prisma.member.count({ where: memberCountWhere }),
       this.prisma.user.findMany({
         orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
         select: {
@@ -334,7 +348,7 @@ export class WorkspaceService {
           status: true,
         },
         take: 50,
-        where: { mandalId },
+        where: isCollectorWorkspace ? { id: ctx.userId, mandalId } : { mandalId },
       }),
       this.prisma.auditEvent.findMany({
         orderBy: { createdAt: 'desc' },

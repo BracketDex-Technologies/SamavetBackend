@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -44,6 +44,13 @@ export class MandalsController {
   @ApiOkResponse({ description: 'All login accounts for a mandal.' })
   listUsers(@Param('id') id: string) {
     return this.mandalsService.listUsers(id);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOkResponse({ description: 'Mandal deleted.' })
+  deleteMandal(@Param('id') id: string) {
+    return this.mandalsService.deleteMandal(id);
   }
 
   @Post(':id/users')

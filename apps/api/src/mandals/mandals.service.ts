@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { AccountStatus, UserRole } from '@prisma/client';
+import { AccountStatus, Prisma, UserRole } from '@prisma/client';
 import argon2 from 'argon2';
 import { slugify } from '../common/utils/slugify';
 import { PrismaService } from '../prisma/prisma.service';
@@ -56,13 +56,21 @@ export class MandalsService {
     ].filter(Boolean) as Array<{ email?: string; phone?: string }>;
 
     const existingAdmin = await this.prisma.user.findFirst({
+      include: { memberProfiles: { select: { status: true } } },
       where: {
         OR: adminUniqueChecks,
       },
     });
 
-    if (existingAdmin) {
+    if (existingAdmin && !this.canReclaimLogin(existingAdmin)) {
       throw new ConflictException('Admin email or phone is already used.');
+    }
+
+    if (existingAdmin) {
+      await this.prisma.$transaction((tx) => this.hardDeleteUser(tx, {
+        mandalId: existingAdmin.mandalId,
+        userId: existingAdmin.id,
+      }));
     }
 
     const logoAsset = dto.logoDataUrl
@@ -146,7 +154,7 @@ export class MandalsService {
 
   async list(query: ListMandalsQueryDto) {
     const where: MandalListWhere = {
-      status: query.status,
+      status: query.status ?? AccountStatus.ACTIVE,
     };
 
     if (query.search) {
@@ -181,7 +189,7 @@ export class MandalsService {
   }
 
   async getById(id: string) {
-    const mandal = await this.prisma.mandal.findUnique({
+    const mandal = await this.prisma.mandal.findFirst({
       include: {
         users: {
           select: {
@@ -195,17 +203,18 @@ export class MandalsService {
           },
           where: {
             role: UserRole.MANDAL_ADMIN,
+            status: AccountStatus.ACTIVE,
           },
         },
         _count: {
           select: {
             festivals: true,
-            members: true,
+            members: { where: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } } },
             slips: true,
           },
         },
       },
-      where: { id },
+      where: { id, status: AccountStatus.ACTIVE },
     });
 
     if (!mandal) {
@@ -230,7 +239,15 @@ export class MandalsService {
         role: true,
         status: true,
       },
-      where: { mandalId: id, status: AccountStatus.ACTIVE },
+      where: {
+        mandalId: id,
+        status: AccountStatus.ACTIVE,
+        OR: [
+          { role: { notIn: [UserRole.MEMBER, UserRole.GROUP_LEADER] } },
+          { memberProfiles: { some: { status: AccountStatus.ACTIVE } } },
+          { memberProfiles: { none: {} } },
+        ],
+      },
     });
   }
 
@@ -251,11 +268,19 @@ export class MandalsService {
     ].filter(Boolean) as Array<{ email?: string; phone?: string }>;
 
     const existingUser = await this.prisma.user.findFirst({
+      include: { memberProfiles: { select: { status: true } } },
       where: { OR: uniqueChecks },
     });
 
-    if (existingUser) {
+    if (existingUser && !this.canReclaimLogin(existingUser)) {
       throw new ConflictException('User email or phone is already used.');
+    }
+
+    if (existingUser) {
+      await this.prisma.$transaction((tx) => this.hardDeleteUser(tx, {
+        mandalId: existingUser.mandalId,
+        userId: existingUser.id,
+      }));
     }
 
     const user = await this.prisma.user.create({
@@ -316,6 +341,87 @@ export class MandalsService {
     });
 
     return updated;
+  }
+
+  async deleteMandal(id: string) {
+    const mandal = await this.prisma.mandal.findUnique({ where: { id } });
+
+    if (!mandal) {
+      throw new NotFoundException('Mandal not found.');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.userSession.deleteMany({
+        where: { user: { mandalId: id } },
+      });
+
+      await tx.auditEvent.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.backgroundJob.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.varganiSlip.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.expense.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.expenseCategory.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.festivalTask.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.festival.updateMany({
+        data: { activeTemplateVersionId: null },
+        where: { mandalId: id },
+      });
+
+      await tx.member.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.memberGroup.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.customField.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.slipTemplateVersion.deleteMany({
+        where: { template: { mandalId: id } },
+      });
+
+      await tx.slipTemplate.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.slipSequence.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.festival.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.user.deleteMany({
+        where: { mandalId: id },
+      });
+
+      await tx.mandal.delete({
+        where: { id },
+      });
+    });
+
+    return { deleted: true, id };
   }
 
   async updateUser(mandalId: string, userId: string, dto: UpdateMandalUserDto) {
@@ -383,6 +489,63 @@ export class MandalsService {
     return updated;
   }
 
+  private canReclaimLogin(user: {
+    memberProfiles: Array<{ status: AccountStatus }>;
+    role: UserRole;
+    status: AccountStatus;
+  }) {
+    if (user.status !== AccountStatus.ACTIVE) return true;
+    const isCollectionLogin = user.role === UserRole.MEMBER || user.role === UserRole.GROUP_LEADER;
+    const hasActiveMemberProfile = user.memberProfiles.some((profile) => profile.status === AccountStatus.ACTIVE);
+    return isCollectionLogin && !hasActiveMemberProfile;
+  }
+
+  private async hardDeleteUser(
+    tx: Prisma.TransactionClient,
+    params: { mandalId?: string | null; userId: string },
+  ) {
+    const mandalFilter = params.mandalId ? { mandalId: params.mandalId } : {};
+
+    await tx.memberGroup.updateMany({
+      data: { leaderUserId: null },
+      where: { leaderUserId: params.userId, ...mandalFilter },
+    });
+
+    await tx.festivalTask.updateMany({
+      data: { assigneeUserId: null },
+      where: { assigneeUserId: params.userId, ...mandalFilter },
+    });
+
+    await tx.expense.updateMany({
+      data: { approvedBy: null },
+      where: { approvedBy: params.userId, ...mandalFilter },
+    });
+
+    await tx.varganiSlip.deleteMany({
+      where: { collectedByUserId: params.userId, ...mandalFilter },
+    });
+
+    await tx.festivalTask.deleteMany({
+      where: { createdBy: params.userId, ...mandalFilter },
+    });
+
+    await tx.expense.deleteMany({
+      where: { createdBy: params.userId, ...mandalFilter },
+    });
+
+    await tx.userSession.deleteMany({
+      where: { userId: params.userId },
+    });
+
+    await tx.member.deleteMany({
+      where: { userId: params.userId, ...mandalFilter },
+    });
+
+    await tx.user.delete({
+      where: { id: params.userId },
+    });
+  }
+
   private serializeAdmin(admin: {
     createdAt: Date;
     email: string | null;
@@ -408,9 +571,9 @@ export class MandalsService {
   }
 
   private async ensureMandalExists(id: string) {
-    const mandal = await this.prisma.mandal.findUnique({
+    const mandal = await this.prisma.mandal.findFirst({
       select: { id: true },
-      where: { id },
+      where: { id, status: AccountStatus.ACTIVE },
     });
 
     if (!mandal) {

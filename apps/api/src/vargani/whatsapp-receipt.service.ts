@@ -33,10 +33,19 @@ export class WhatsAppReceiptService {
       this.config.get('AUTHKEY_WHATSAPP_RECEIPT_WID', { infer: true }).trim() ||
       this.config.get('AUTHKEY_WHATSAPP_WID', { infer: true }).trim();
     const phone = normalizeIndianWhatsAppNumber(input.phone);
+    const templateType = this.config.get('AUTHKEY_WHATSAPP_TEMPLATE_TYPE', { infer: true });
+    const headerMediaUrl =
+      input.mediaUrl?.trim() || this.config.get('AUTHKEY_WHATSAPP_HEADER_MEDIA_URL', { infer: true }).trim();
 
     if (!enabled) return { ok: true, reason: 'whatsapp_disabled', status: 'skipped' };
     if (!authkey || !wid) return { ok: true, reason: 'authkey_not_configured', status: 'skipped' };
     if (!phone) return { ok: false, reason: 'missing_whatsapp_number', status: 'failed' };
+    if (templateType === 'media' && !isPublicMediaUrl(headerMediaUrl)) {
+      this.logger.warn(
+        `Authkey WhatsApp skipped for ${input.slipNumber}: media template requires a public image/document URL.`,
+      );
+      return { ok: false, provider: 'AUTHKEY', reason: 'missing_public_header_media_url', status: 'failed' };
+    }
 
     const payload = {
       bodyValues: {
@@ -46,12 +55,17 @@ export class WhatsAppReceiptService {
       },
       authkey,
       country_code: this.config.get('AUTHKEY_WHATSAPP_COUNTRY_CODE', { infer: true }).trim() || '91',
-      headerValues: {
-        headerData: input.mediaUrl?.trim() || input.receiptUrl,
-        headerFileName: `${this.config.get('AUTHKEY_WHATSAPP_HEADER_FILE_NAME', { infer: true })} ${input.slipNumber}`.trim(),
-      },
+      ...(templateType === 'media'
+        ? {
+            headerValues: {
+              headerData: headerMediaUrl,
+              headerFileName:
+                `${this.config.get('AUTHKEY_WHATSAPP_HEADER_FILE_NAME', { infer: true })} ${input.slipNumber}`.trim(),
+            },
+          }
+        : {}),
       mobile: phone,
-      type: this.config.get('AUTHKEY_WHATSAPP_TEMPLATE_TYPE', { infer: true }),
+      type: templateType,
       wid,
     };
 
@@ -87,4 +101,17 @@ function normalizeIndianWhatsAppNumber(phone?: string | null) {
   if (digits.length === 10) return digits;
   if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
   return digits;
+}
+
+function isPublicMediaUrl(value?: string | null) {
+  if (!value) return false;
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return false;
+    if (['localhost', '127.0.0.1'].includes(url.hostname)) return false;
+    return /\.(?:apng|avif|gif|jpe?g|pdf|png|webp)(?:$|\?)/i.test(url.pathname);
+  } catch {
+    return false;
+  }
 }

@@ -11,6 +11,7 @@ import { CancelSlipDto } from './dto/cancel-slip.dto';
 import { CreateVarganiSlipDto } from './dto/create-vargani-slip.dto';
 import { ShareSlipDto } from './dto/share-slip.dto';
 import { UpdateVarganiSlipDto } from './dto/update-vargani-slip.dto';
+import { UploadSlipReceiptImageDto } from './dto/upload-slip-receipt-image.dto';
 import { VarganiService } from './vargani.service';
 
 @ApiTags('vargani')
@@ -55,6 +56,12 @@ export class VarganiController {
   @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER, UserRole.MEMBER)
   shareSlip(@AuthUser() ctx: AuthContext, @Param('id') id: string, @Body() dto: ShareSlipDto) {
     return this.varganiService.recordShare(ctx, id, dto);
+  }
+
+  @Post('slips/:id/receipt-image')
+  @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER, UserRole.MEMBER)
+  uploadReceiptImage(@AuthUser() ctx: AuthContext, @Param('id') id: string, @Body() dto: UploadSlipReceiptImageDto) {
+    return this.varganiService.uploadReceiptImage(ctx, id, dto);
   }
 
   @Patch('slips/:id')

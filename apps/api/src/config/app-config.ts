@@ -35,6 +35,7 @@ const appConfigSchema = z.object({
   AUTHKEY_WHATSAPP_RECEIPT_WID: z.string().optional().default(''),
   AUTHKEY_WHATSAPP_COUNTRY_CODE: z.string().default('91'),
   AUTHKEY_WHATSAPP_TEMPLATE_TYPE: z.enum(['text', 'media']).default('media'),
+  AUTHKEY_WHATSAPP_HEADER_MEDIA_URL: z.string().optional().default(''),
   AUTHKEY_WHATSAPP_HEADER_FILE_NAME: z.string().default('Vargani Receipt'),
   AUTHKEY_WHATSAPP_ENABLED: z.coerce.boolean().default(false),
   CORS_ORIGINS: z

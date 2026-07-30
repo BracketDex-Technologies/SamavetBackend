@@ -20,10 +20,12 @@ import { AppConfig } from '../config/app-config';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { JobsService } from '../jobs/jobs.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { CancelSlipDto } from './dto/cancel-slip.dto';
 import { CreateVarganiSlipDto } from './dto/create-vargani-slip.dto';
 import { ShareSlipDto } from './dto/share-slip.dto';
 import { UpdateVarganiSlipDto } from './dto/update-vargani-slip.dto';
+import { UploadSlipReceiptImageDto } from './dto/upload-slip-receipt-image.dto';
 import { WhatsAppReceiptService, WhatsAppSendResult } from './whatsapp-receipt.service';
 
 interface SequenceRow {
@@ -93,6 +95,7 @@ export class VarganiService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly whatsAppReceiptService: WhatsAppReceiptService,
+    private readonly storageService: StorageService,
   ) {}
 
   async getActiveForm(ctx: AuthContext) {
@@ -239,8 +242,7 @@ export class VarganiService {
       });
     }
 
-    const whatsapp = slip.status === SlipStatus.ACTIVE ? await this.shareSlipToWhatsApp(slip, dto.contributorPhone) : null;
-    return whatsapp ? { ...slip, whatsapp } : slip;
+    return slip;
   }
 
   async listSlips(ctx: AuthContext, query: PaginationQueryDto) {
@@ -306,6 +308,48 @@ export class VarganiService {
       throw new BadRequestException('Receipt is available only after payment is received.');
     }
     return this.renderReceiptForSlip(slip);
+  }
+
+  async uploadReceiptImage(ctx: AuthContext, id: string, dto: UploadSlipReceiptImageDto) {
+    const slip = await this.getSlip(ctx, id);
+    if (slip.status !== SlipStatus.ACTIVE) {
+      throw new BadRequestException('Receipt image can be uploaded only after payment is received.');
+    }
+
+    const asset = await this.storageService.uploadDataUrl({
+      dataUrl: dto.dataUrl,
+      fileName: `${slip.slipNumber || slip.id}.jpg`,
+      folder: `mandals/${slip.mandalId}/festivals/${slip.festivalId}/receipts`,
+    });
+
+    const updated = await this.prisma.varganiSlip.update({
+      data: {
+        receiptImageUrl: asset.url,
+        renderStatus: RenderStatus.READY,
+      },
+      where: { id: slip.id },
+    });
+
+    await this.prisma.auditEvent.create({
+      data: {
+        action: 'receipt_image_uploaded',
+        actorUserId: ctx.userId,
+        entityId: slip.id,
+        entityType: 'vargani_slip',
+        mandalId: slip.mandalId,
+        metadata: toJsonWriteValue({
+          receiptImageUrl: asset.url,
+          slipNumber: slip.slipNumber,
+          storage: asset.storage,
+        }),
+      },
+    });
+
+    return {
+      ok: true,
+      receiptImageUrl: updated.receiptImageUrl,
+      storage: asset.storage,
+    };
   }
 
   async recordShare(ctx: AuthContext, id: string, dto: ShareSlipDto) {

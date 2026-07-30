@@ -47,11 +47,14 @@ export class WhatsAppReceiptService {
       return { ok: false, provider: 'AUTHKEY', reason: 'missing_public_header_media_url', status: 'failed' };
     }
 
+    const contributorName = input.contributorName.trim();
+    const organizationName = input.organizationName?.trim() || input.mandalName.trim();
+    const mandalName = input.mandalName.trim();
     const payload = {
       bodyValues: {
-        var1: input.contributorName,
-        var2: input.organizationName?.trim() || input.mandalName,
-        var3: input.mandalName,
+        var1: contributorName,
+        var2: organizationName,
+        var3: mandalName,
       },
       authkey,
       country_code: this.config.get('AUTHKEY_WHATSAPP_COUNTRY_CODE', { infer: true }).trim() || '91',
@@ -66,6 +69,9 @@ export class WhatsAppReceiptService {
         : {}),
       mobile: phone,
       type: templateType,
+      var1: contributorName,
+      var2: organizationName,
+      var3: mandalName,
       wid,
     };
 

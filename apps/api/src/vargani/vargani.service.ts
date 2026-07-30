@@ -24,6 +24,7 @@ import { CancelSlipDto } from './dto/cancel-slip.dto';
 import { CreateVarganiSlipDto } from './dto/create-vargani-slip.dto';
 import { ShareSlipDto } from './dto/share-slip.dto';
 import { UpdateVarganiSlipDto } from './dto/update-vargani-slip.dto';
+import { WhatsAppReceiptService, WhatsAppSendResult } from './whatsapp-receipt.service';
 
 interface SequenceRow {
   current_value: bigint;
@@ -70,6 +71,17 @@ interface TemplateRenderConfig {
   fields?: Record<string, TemplateFieldPlacement>;
 }
 
+interface WhatsAppSlip {
+  collectedByUserId: string;
+  contributorName: string;
+  contributorPhone: string | null;
+  id: string;
+  mandal: { name: string };
+  mandalId: string;
+  receiptImageUrl: string | null;
+  slipNumber: string;
+}
+
 type SlipWithTemplate = Awaited<ReturnType<VarganiService['getSlip']>> & {
   templateVersion: NonNullable<Awaited<ReturnType<VarganiService['getSlip']>>['templateVersion']>;
 };
@@ -80,6 +92,7 @@ export class VarganiService {
     private readonly jobsService: JobsService,
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
+    private readonly whatsAppReceiptService: WhatsAppReceiptService,
   ) {}
 
   async getActiveForm(ctx: AuthContext) {
@@ -158,6 +171,7 @@ export class VarganiService {
       const existing = await this.prisma.varganiSlip.findUnique({
         include: {
           collector: { select: { id: true, name: true, phone: true } },
+          mandal: { select: { id: true, name: true } },
         },
         where: { idempotencyKey: dto.idempotencyKey },
       });
@@ -175,6 +189,7 @@ export class VarganiService {
       const slip = await tx.varganiSlip.create({
         include: {
           collector: { select: { id: true, name: true, phone: true } },
+          mandal: { select: { id: true, name: true } },
         },
         data: {
           amount: dto.amount,
@@ -224,7 +239,8 @@ export class VarganiService {
       });
     }
 
-    return slip;
+    const whatsapp = slip.status === SlipStatus.ACTIVE ? await this.shareSlipToWhatsApp(slip, dto.contributorPhone) : null;
+    return whatsapp ? { ...slip, whatsapp } : slip;
   }
 
   async listSlips(ctx: AuthContext, query: PaginationQueryDto) {
@@ -271,6 +287,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
+        mandal: { select: { id: true, name: true } },
         templateVersion: true,
       },
       where: { id, mandalId },
@@ -341,12 +358,15 @@ export class VarganiService {
       type: 'WHATSAPP_SHARE_AUDIT',
     });
 
+    const whatsapp = await this.sendSlipToWhatsApp(slip, dto.phone, receiptUrl);
+
     return {
       auditEventId: event.id,
       expiresAt: shareTokenExpiresAt,
       ok: true,
       receiptUrl,
       sharedAt: event.createdAt,
+      whatsapp,
     };
   }
 
@@ -357,6 +377,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
+        mandal: { select: { id: true, name: true } },
         templateVersion: true,
       },
       where: {
@@ -384,6 +405,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
+        mandal: { select: { id: true, name: true } },
         templateVersion: true,
       },
       where: {
@@ -410,6 +432,63 @@ export class VarganiService {
         ? `${baseUrl}/v1`
         : `${baseUrl}/api/v1`;
     return `${apiBaseUrl}/public/vargani/receipts/${encodeURIComponent(token)}.html`;
+  }
+
+  private async createPublicReceiptShare(slipId: string) {
+    const shareToken = randomBytes(32).toString('base64url');
+    const shareTokenHash = hashShareToken(shareToken);
+    const shareTokenExpiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+    const receiptUrl = this.publicReceiptUrl(shareToken);
+
+    await this.prisma.varganiSlip.update({
+      data: {
+        publicShareTokenExpiresAt: shareTokenExpiresAt,
+        publicShareTokenHash: shareTokenHash,
+      },
+      where: { id: slipId },
+    });
+
+    return { expiresAt: shareTokenExpiresAt, receiptUrl };
+  }
+
+  private async shareSlipToWhatsApp(slip: WhatsAppSlip, preferredPhone?: string | null) {
+    const share = await this.createPublicReceiptShare(slip.id);
+    return this.sendSlipToWhatsApp(slip, preferredPhone, share.receiptUrl);
+  }
+
+  private async sendSlipToWhatsApp(
+    slip: WhatsAppSlip,
+    preferredPhone: string | null | undefined,
+    receiptUrl: string,
+  ): Promise<WhatsAppSendResult> {
+    const result = await this.whatsAppReceiptService.sendReceipt({
+      contributorName: slip.contributorName,
+      mandalName: slip.mandal.name,
+      mediaUrl: slip.receiptImageUrl,
+      organizationName: slip.mandal.name,
+      phone: preferredPhone || slip.contributorPhone,
+      receiptUrl,
+      slipNumber: slip.slipNumber,
+    });
+
+    await this.prisma.auditEvent.create({
+      data: {
+        action: result.status === 'sent' ? 'whatsapp_sent' : `whatsapp_${result.status}`,
+        actorUserId: slip.collectedByUserId,
+        entityId: slip.id,
+        entityType: 'vargani_slip',
+        mandalId: slip.mandalId,
+        metadata: toJsonWriteValue({
+          phone: preferredPhone || slip.contributorPhone || null,
+          reason: result.reason ?? null,
+          receiptUrl,
+          slipNumber: slip.slipNumber,
+          status: result.status,
+        }),
+      },
+    });
+
+    return { ...result, receiptUrl };
   }
 
   private async renderReceiptForSlip(slip: Awaited<ReturnType<VarganiService['getSlip']>>) {

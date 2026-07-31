@@ -545,9 +545,13 @@ export class VarganiService {
       readString(slip.mandal.nameMr) ||
       knownMandalMarathiName(slip.mandal.name) ||
       slip.mandal.name;
+    const contributorName =
+      readString(customData.contributorNameMr) ||
+      readString(customData.nameMr) ||
+      slip.contributorName;
 
     const result = await this.whatsAppReceiptService.sendReceipt({
-      contributorName: slip.contributorName,
+      contributorName,
       mandalName,
       mediaUrl: slip.receiptImageUrl,
       organizationName: mandalName,

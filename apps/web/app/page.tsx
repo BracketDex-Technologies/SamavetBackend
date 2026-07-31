@@ -10,12 +10,14 @@ import {
   IndianRupee,
   Layers3,
   LogIn,
+  Menu,
   Plus,
   Printer,
   ReceiptText,
   ShieldCheck,
   Smartphone,
   Upload,
+  X,
 } from 'lucide-react';
 import { FormEvent, PointerEvent, useEffect, useMemo, useState } from 'react';
 import {
@@ -76,8 +78,9 @@ export default function Home() {
   const [role, setRole] = useState<Role>('super');
   const [session, setSession] = useState<AuthSession | null>(null);
   const [status, setStatus] = useState<UiState>('idle');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notice, setNotice] = useState(
-    'Demo mode is ready. Login to use live Supabase-backed data.',
+    'Demo mode is ready. Login to use live data.',
   );
   const [mandals, setMandals] = useState<Mandal[]>([]);
   const [festivals, setFestivals] = useState<Festival[]>([]);
@@ -144,15 +147,30 @@ export default function Home() {
         setSelectedMandalId((current) => current || response.items[0]?.id || '');
       } else if (currentSession.user.mandalId) {
         setSelectedMandalId(currentSession.user.mandalId);
-        const festivalList = await apiRequest<Festival[]>(
-          `/mandals/${currentSession.user.mandalId}/festivals`,
-          {},
-          currentSession,
-        );
+        
+        // Execute API queries concurrently for high speed
+        const [festivalList, formResponse, slipsResponse] = await Promise.all([
+          apiRequest<Festival[]>(`/mandals/${currentSession.user.mandalId}/festivals`, {}, currentSession),
+          apiRequest<{ customFields: CustomField[]; festival: Festival }>('/vargani/active-form', {}, currentSession).catch(() => null),
+          apiRequest<{ items: VarganiSlip[] }>('/vargani/slips?limit=25', {}, currentSession).catch(() => ({ items: [] })),
+        ]);
+
         setFestivals(festivalList);
-        setSelectedFestivalId((current) => current || festivalList[0]?.id || '');
-        await refreshActiveForm(currentSession);
-        await refreshSlips(currentSession);
+        if (festivalList[0]?.id) {
+          setSelectedFestivalId((current) => current || festivalList[0]?.id || '');
+        }
+
+        if (formResponse) {
+          setCustomFields(formResponse.customFields);
+          if (formResponse.festival?.id) {
+            setSelectedFestivalId(formResponse.festival.id);
+          }
+        }
+
+        if (slipsResponse?.items?.length) {
+          setSlips(slipsResponse.items);
+          setSelectedSlip(slipsResponse.items[0]!);
+        }
       }
       setNotice('Live data loaded from the API.');
     } catch (error) {
@@ -162,7 +180,7 @@ export default function Home() {
     }
   }
 
-  async function refreshActiveForm(currentSession = session) {
+  async function _refreshActiveForm(currentSession = session) {
     if (!currentSession || currentSession.user.role === 'SUPER_ADMIN') {
       return;
     }
@@ -176,7 +194,7 @@ export default function Home() {
     setSelectedFestivalId(form.festival.id);
   }
 
-  async function refreshSlips(currentSession = session) {
+  async function _refreshSlips(currentSession = session) {
     if (!currentSession || currentSession.user.role === 'SUPER_ADMIN') {
       return;
     }
@@ -452,22 +470,55 @@ export default function Home() {
 
   return (
     <main className="shell">
-      <aside className="sidebar">
+      {mobileMenuOpen && (
+        <div
+          className="mobile-backdrop"
+          onClick={() => setMobileMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      <aside className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
         <div className="brand-lockup">
           <div className="brand-mark">DM</div>
           <div>
             <strong>Digital Mandal</strong>
             <span>Festival OS</span>
           </div>
+          <button
+            className="mobile-close-btn"
+            type="button"
+            onClick={() => setMobileMenuOpen(false)}
+            aria-label="Close menu"
+          >
+            <X size={20} />
+          </button>
         </div>
         <nav className="role-switcher" aria-label="Workspace role">
-          <button className={role === 'super' ? 'active' : ''} onClick={() => setRole('super')}>
+          <button
+            className={role === 'super' ? 'active' : ''}
+            onClick={() => {
+              setRole('super');
+              setMobileMenuOpen(false);
+            }}
+          >
             <ShieldCheck size={18} /> Super Admin
           </button>
-          <button className={role === 'admin' ? 'active' : ''} onClick={() => setRole('admin')}>
+          <button
+            className={role === 'admin' ? 'active' : ''}
+            onClick={() => {
+              setRole('admin');
+              setMobileMenuOpen(false);
+            }}
+          >
             <CircleGauge size={18} /> Mandal Admin
           </button>
-          <button className={role === 'member' ? 'active' : ''} onClick={() => setRole('member')}>
+          <button
+            className={role === 'member' ? 'active' : ''}
+            onClick={() => {
+              setRole('member');
+              setMobileMenuOpen(false);
+            }}
+          >
             <Smartphone size={18} /> Member App
           </button>
         </nav>
@@ -482,9 +533,19 @@ export default function Home() {
 
       <section className="workspace">
         <header className="topbar">
-          <div>
-            <p>{isLive ? 'Live Supabase-backed workspace' : 'Demo workspace'}</p>
-            <h1>{roleTitle(role)}</h1>
+          <div className="topbar-brand">
+            <button
+              className="mobile-menu-btn"
+              type="button"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              aria-label="Toggle menu"
+            >
+              {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
+            </button>
+            <div>
+              <p>{isLive ? 'Live Supabase-backed workspace' : 'Demo workspace'}</p>
+              <h1>{roleTitle(role)}</h1>
+            </div>
           </div>
           <div className="top-actions">
             {session ? (

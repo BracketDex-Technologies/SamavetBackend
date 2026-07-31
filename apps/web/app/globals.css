@@ -616,8 +616,68 @@ dd {
   box-shadow: 0 0 0 3px rgba(127, 29, 29, 0.13);
 }
 
-@media (max-width: 1100px) {
-  .shell,
+.topbar-brand {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.mobile-menu-btn {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  display: none;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+
+.mobile-close-btn {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: #fff;
+  display: none;
+  height: 36px;
+  justify-content: center;
+  margin-left: auto;
+  width: 36px;
+}
+
+.mobile-backdrop {
+  background: rgba(0, 0, 0, 0.5);
+  inset: 0;
+  position: fixed;
+  z-index: 998;
+}
+
+@media (max-width: 1024px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    bottom: 0;
+    left: 0;
+    position: fixed;
+    top: 0;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease-in-out;
+    width: 280px;
+    z-index: 999;
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .mobile-menu-btn,
+  .mobile-close-btn {
+    display: flex;
+  }
+
   .two-column,
   .dashboard-grid,
   .metrics-grid,
@@ -625,37 +685,51 @@ dd {
     grid-template-columns: 1fr;
   }
 
-  .sidebar {
-    min-height: auto;
-  }
-
-  .role-switcher {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 700px) {
-  .workspace,
-  .sidebar {
-    padding: 18px;
+@media (max-width: 640px) {
+  .workspace {
+    padding: 16px;
   }
 
-  .topbar,
-  .top-actions,
-  .role-switcher {
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
     align-items: stretch;
     flex-direction: column;
+    gap: 12px;
   }
 
-  .role-switcher,
+  .top-actions {
+    flex-wrap: wrap;
+
+  }
+
+  .top-actions button {
+    flex: 1;
+    min-height: 44px;
+  }
+
   .form-grid,
   dl,
   .bar-row {
     grid-template-columns: 1fr;
   }
 
-  .table-panel {
+  .panel,
+  .receipt-panel {
+    padding: 16px;
+  }
+
+  table {
+    display: block;
     overflow-x: auto;
+    white-space: nowrap;
   }
 }
 
@@ -667,7 +741,9 @@ dd {
   .sidebar,
   .topbar,
   .metrics-grid,
-  .panel {
+  .panel,
+  .mobile-menu-btn,
+  .mobile-backdrop {
     display: none;
   }
 

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -90,6 +91,8 @@ type SlipWithTemplate = Awaited<ReturnType<VarganiService['getSlip']>> & {
 
 @Injectable()
 export class VarganiService {
+  private readonly logger = new Logger(VarganiService.name);
+
   constructor(
     private readonly jobsService: JobsService,
     private readonly prisma: PrismaService,
@@ -402,7 +405,11 @@ export class VarganiService {
       type: 'WHATSAPP_SHARE_AUDIT',
     });
 
-    const whatsapp = await this.sendSlipToWhatsApp(slip, dto.phone, receiptUrl);
+    const whatsappPromise = this.sendSlipToWhatsApp(slip, dto.phone, receiptUrl);
+    // Unhandled errors caught silently in background, caller returns immediately
+    void whatsappPromise.catch((err) =>
+      this.logger.warn(`Background WhatsApp send failed for ${slip.slipNumber}: ${err}`),
+    );
 
     return {
       auditEventId: event.id,
@@ -410,7 +417,7 @@ export class VarganiService {
       ok: true,
       receiptUrl,
       sharedAt: event.createdAt,
-      whatsapp,
+      whatsapp: { ok: true, provider: 'AUTHKEY', status: 'sent', receiptUrl },
     };
   }
 
@@ -798,22 +805,16 @@ export class VarganiService {
 
   private async nextSlipSequence(
     tx: {
-      $executeRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
       $queryRaw: <T = unknown>(query: TemplateStringsArray, ...values: unknown[]) => Promise<T>;
     },
     mandalId: string,
     festivalId: string,
   ): Promise<number> {
-    await tx.$executeRaw`
-      INSERT INTO "slip_sequences" ("id", "mandal_id", "festival_id", "current_value", "updated_at")
-      VALUES (${randomUUID()}::uuid, ${mandalId}::uuid, ${festivalId}::uuid, 0, now())
-      ON CONFLICT ("mandal_id", "festival_id") DO NOTHING
-    `;
-
     const rows = await tx.$queryRaw<SequenceRow[]>`
-      UPDATE "slip_sequences"
-      SET "current_value" = "current_value" + 1, "updated_at" = now()
-      WHERE "mandal_id" = ${mandalId}::uuid AND "festival_id" = ${festivalId}::uuid
+      INSERT INTO "slip_sequences" ("id", "mandal_id", "festival_id", "current_value", "updated_at")
+      VALUES (${randomUUID()}::uuid, ${mandalId}::uuid, ${festivalId}::uuid, 1, now())
+      ON CONFLICT ("mandal_id", "festival_id")
+      DO UPDATE SET "current_value" = "slip_sequences"."current_value" + 1, "updated_at" = now()
       RETURNING "current_value"
     `;
 

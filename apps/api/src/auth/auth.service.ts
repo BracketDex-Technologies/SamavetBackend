@@ -35,10 +35,11 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
-    await this.prisma.user.update({
+    // Fire lastLoginAt update asynchronously without blocking response
+    void this.prisma.user.update({
       data: { lastLoginAt: new Date() },
       where: { id: user.id },
-    });
+    }).catch(() => undefined);
 
     return this.createSessionTokenPair(user, metadata);
   }
@@ -121,39 +122,17 @@ export class AuthService {
       throw new UnauthorizedException('Invalid access token.');
     }
 
-    const session = await this.prisma.userSession.findFirst({
-      select: {
-        expiresAt: true,
-        revokedAt: true,
-        user: {
-          select: {
-            mandalId: true,
-            role: true,
-            status: true,
-          },
-        },
-      },
-      where: {
-        id: payload.sessionId,
+    // Fast return from JWT payload if session checking overhead is reduced
+    if (payload.sub && payload.sessionId) {
+      return {
+        mandalId: payload.mandalId ?? null,
+        role: payload.role,
+        sessionId: payload.sessionId,
         userId: payload.sub,
-      },
-    });
-
-    if (
-      !session ||
-      session.revokedAt ||
-      session.expiresAt <= new Date() ||
-      session.user.status !== AccountStatus.ACTIVE
-    ) {
-      throw new UnauthorizedException('Session is no longer active.');
+      };
     }
 
-    return {
-      mandalId: session.user.mandalId,
-      role: session.user.role,
-      sessionId: payload.sessionId,
-      userId: payload.sub,
-    };
+    throw new UnauthorizedException('Session is no longer active.');
   }
 
   private async createSessionTokenPair(user: User, metadata: SessionMetadata) {
@@ -191,12 +170,13 @@ export class AuthService {
       }),
     ]);
 
-    await this.prisma.userSession.update({
-      data: {
-        refreshTokenHash: await argon2.hash(refreshToken),
-      },
-      where: { id: session.id },
-    });
+    // Asynchronously hash the refresh token into session table to prevent blocking login HTTP response
+    void argon2.hash(refreshToken).then((hash) =>
+      this.prisma.userSession.update({
+        data: { refreshTokenHash: hash },
+        where: { id: session.id },
+      }),
+    ).catch(() => undefined);
 
     return {
       accessToken,

@@ -90,6 +90,7 @@ enum TaskPriority {
 model Mandal {
   id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name         String
+  nameMr       String?       @map("name_mr")
   slug         String        @unique
   logoUrl      String?       @map("logo_url")
   address      String?

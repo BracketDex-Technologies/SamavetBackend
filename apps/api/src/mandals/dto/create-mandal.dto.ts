@@ -40,6 +40,12 @@ export class CreateMandalDto {
   @MaxLength(160)
   name!: string;
 
+  @ApiPropertyOptional({ example: 'बाजीराव रोड नतुबग मंडळ ट्रस्ट' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  nameMr?: string;
+
   @ApiPropertyOptional({ example: 'shree-ganesh-mitra-mandal' })
   @IsOptional()
   @IsString()

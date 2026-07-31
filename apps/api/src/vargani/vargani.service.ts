@@ -80,7 +80,7 @@ interface WhatsAppSlip {
   contributorPhone: string | null;
   customData?: unknown;
   id: string;
-  mandal: { name: string };
+  mandal: { name: string; nameMr?: string | null };
   mandalId: string;
   receiptImageUrl: string | null;
   slipNumber: string;
@@ -178,7 +178,7 @@ export class VarganiService {
       const existing = await this.prisma.varganiSlip.findUnique({
         include: {
           collector: { select: { id: true, name: true, phone: true } },
-          mandal: { select: { id: true, name: true } },
+          mandal: { select: { id: true, name: true, nameMr: true } },
         },
         where: { idempotencyKey: dto.idempotencyKey },
       });
@@ -196,7 +196,7 @@ export class VarganiService {
       const slip = await tx.varganiSlip.create({
         include: {
           collector: { select: { id: true, name: true, phone: true } },
-          mandal: { select: { id: true, name: true } },
+          mandal: { select: { id: true, name: true, nameMr: true } },
         },
         data: {
           amount: dto.amount,
@@ -293,7 +293,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true } },
+        mandal: { select: { id: true, name: true, nameMr: true } },
         templateVersion: true,
       },
       where: { id, mandalId },
@@ -429,7 +429,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true } },
+        mandal: { select: { id: true, name: true, nameMr: true } },
         templateVersion: true,
       },
       where: {
@@ -457,7 +457,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true } },
+        mandal: { select: { id: true, name: true, nameMr: true } },
         templateVersion: true,
       },
       where: {
@@ -514,17 +514,15 @@ export class VarganiService {
     receiptUrl: string,
   ): Promise<WhatsAppSendResult> {
     const customData = objectFromJson(slip.customData);
-    const contributorName =
-      readString(customData.contributorNameMr) ||
-      readString(customData.contributor_name_mr) ||
-      transliterateReceiptTextToMarathi(slip.contributorName);
     const mandalName =
       readString(customData.mandalNameMr) ||
       readString(customData.organizationNameMr) ||
-      transliterateReceiptTextToMarathi(slip.mandal.name);
+      readString(slip.mandal.nameMr) ||
+      knownMandalMarathiName(slip.mandal.name) ||
+      slip.mandal.name;
 
     const result = await this.whatsAppReceiptService.sendReceipt({
-      contributorName,
+      contributorName: slip.contributorName,
       mandalName,
       mediaUrl: slip.receiptImageUrl,
       organizationName: mandalName,
@@ -854,242 +852,6 @@ function toJsonWriteValue(value: unknown): JsonWriteValue {
   return value as JsonWriteValue;
 }
 
-function objectFromJson(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function readString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function hasDevanagari(value: string) {
-  return /[\u0900-\u097F]/.test(value);
-}
-
-function toMarathiDigits(val: string | number): string {
-  const map: Record<string, string> = {
-    '0': '०',
-    '1': '१',
-    '2': '२',
-    '3': '३',
-    '4': '४',
-    '5': '५',
-    '6': '६',
-    '7': '७',
-    '8': '८',
-    '9': '९',
-  };
-  return String(val).replace(/[0-9]/g, (digit) => map[digit] ?? digit);
-}
-
-const LATIN_TO_MARATHI_WORDS: Record<string, string> = {
-  aditya: 'आदित्य',
-  akash: 'आकाश',
-  amit: 'अमित',
-  aniket: 'अनिकेत',
-  area: 'परिसर',
-  barathe: 'बाराथे',
-  building: 'बिल्डिंग',
-  cash: 'नगद',
-  chaudhari: 'चौधरी',
-  chaudhary: 'चौधरी',
-  chingu: 'चिंगू',
-  choudhari: 'चौधरी',
-  choudhary: 'चौधरी',
-  chowdhari: 'चौधरी',
-  chowdhary: 'चौधरी',
-  collector: 'कलेक्टर',
-  darshan: 'दर्शन',
-  dhiraj: 'धीरज',
-  gade: 'गाडे',
-  gadhave: 'गाढवे',
-  gadekar: 'गाडेकर',
-  gaikwad: 'गायकवाड',
-  ghorpade: 'घोरपडे',
-  ghadekar: 'घाडेकर',
-  gorpade: 'घोरपडे',
-  group: 'गट',
-  hande: 'हांडे',
-  kakde: 'काकडे',
-  lane: 'लेन',
-  mahesh: 'महेश',
-  main: 'मुख्य',
-  mandal: 'मंडळ',
-  maurya: 'मौर्य',
-  mitra: 'मित्र',
-  mogre: 'मोगरे',
-  omkar: 'ओंकार',
-  pawan: 'पवन',
-  pramod: 'प्रमोद',
-  prateek: 'प्रतीक',
-  pratik: 'प्रतीक',
-  pawar: 'पवार',
-  pune: 'पुणे',
-  road: 'रोड',
-  rohan: 'रोहन',
-  shashikant: 'शशिकांत',
-  shirsat: 'शिरसाट',
-  siddharth: 'सिद्धार्थ',
-  soshikant: 'सोशिकांत',
-  suraj: 'सुरज',
-  superkar: 'सुपेकर',
-  wanawadigaon: 'वानवडीगाव',
-  wasti: 'वस्ती',
-  yash: 'यश',
-  yogesh: 'योगेश',
-};
-
-const DEVANAGARI_VOWELS: Record<string, string> = {
-  aa: 'आ',
-  ai: 'ऐ',
-  au: 'औ',
-  ee: 'ई',
-  ii: 'ई',
-  oo: 'ऊ',
-  a: 'अ',
-  e: 'ए',
-  i: 'इ',
-  o: 'ओ',
-  u: 'उ',
-};
-
-const DEVANAGARI_MATRAS: Record<string, string> = {
-  aa: 'ा',
-  ai: 'ै',
-  au: 'ौ',
-  ee: 'ी',
-  ii: 'ी',
-  oo: 'ू',
-  a: '',
-  e: 'े',
-  i: 'ि',
-  o: 'ो',
-  u: 'ु',
-};
-
-const DEVANAGARI_CONSONANTS: Record<string, string> = {
-  bh: 'भ',
-  ch: 'च',
-  dh: 'ध',
-  gh: 'घ',
-  jh: 'झ',
-  kh: 'ख',
-  ph: 'फ',
-  sh: 'श',
-  th: 'थ',
-  b: 'ब',
-  c: 'क',
-  d: 'द',
-  f: 'फ',
-  g: 'ग',
-  h: 'ह',
-  j: 'ज',
-  k: 'क',
-  l: 'ल',
-  m: 'म',
-  n: 'न',
-  p: 'प',
-  q: 'क',
-  r: 'र',
-  s: 'स',
-  t: 'त',
-  v: 'व',
-  w: 'व',
-  x: 'क्स',
-  y: 'य',
-  z: 'झ',
-};
-
-const DEVANAGARI_LETTER_NAMES: Record<string, string> = {
-  A: 'ए',
-  B: 'बी',
-  C: 'सी',
-  D: 'डी',
-  E: 'ई',
-  F: 'एफ',
-  G: 'जी',
-  H: 'एच',
-  I: 'आय',
-  J: 'जे',
-  K: 'के',
-  L: 'एल',
-  M: 'एम',
-  N: 'एन',
-  O: 'ओ',
-  P: 'पी',
-  Q: 'क्यू',
-  R: 'आर',
-  S: 'एस',
-  T: 'टी',
-  U: 'यू',
-  V: 'वी',
-  W: 'डब्ल्यू',
-  X: 'एक्स',
-  Y: 'वाय',
-  Z: 'झेड',
-};
-
-function readTransliterationToken(source: string, index: number, map: Record<string, string>) {
-  const keys = Object.keys(map).sort((a, b) => b.length - a.length);
-  return keys.find((key) => source.startsWith(key, index));
-}
-
-function transliterateLatinWordToMarathi(word: string) {
-  if (!word || hasDevanagari(word)) return word;
-  if (/^[A-Z]$/.test(word)) return DEVANAGARI_LETTER_NAMES[word] ?? word;
-  if (/^[A-Z]{2,}$/.test(word)) {
-    return word
-      .split('')
-      .map((letter) => DEVANAGARI_LETTER_NAMES[letter] ?? letter)
-      .join('');
-  }
-
-  const exact = LATIN_TO_MARATHI_WORDS[word.toLowerCase()];
-  if (exact) return exact;
-
-  const lower = word.toLowerCase();
-  let output = '';
-  let index = 0;
-
-  while (index < lower.length) {
-    const vowel = readTransliterationToken(lower, index, DEVANAGARI_VOWELS);
-    if (vowel) {
-      output += DEVANAGARI_VOWELS[vowel];
-      index += vowel.length;
-      continue;
-    }
-
-    const consonant = readTransliterationToken(lower, index, DEVANAGARI_CONSONANTS);
-    if (!consonant) {
-      output += word[index] ?? '';
-      index += 1;
-      continue;
-    }
-
-    const nextIndex = index + consonant.length;
-    const nextVowel = readTransliterationToken(lower, nextIndex, DEVANAGARI_MATRAS);
-    output += DEVANAGARI_CONSONANTS[consonant];
-
-    if (nextVowel) {
-      output += DEVANAGARI_MATRAS[nextVowel];
-      index = nextIndex + nextVowel.length;
-    } else {
-      const hasMoreLatin = /[a-z]/.test(lower.slice(nextIndex));
-      const nextIsConsonant = Boolean(readTransliterationToken(lower, nextIndex, DEVANAGARI_CONSONANTS));
-      output += hasMoreLatin && nextIsConsonant ? '्' : '';
-      index = nextIndex;
-    }
-  }
-
-  return output;
-}
-
-function transliterateReceiptTextToMarathi(value: string) {
-  if (!value) return value;
-  if (hasDevanagari(value)) return toMarathiDigits(value);
-  return toMarathiDigits(value.replace(/[A-Za-z]+/g, (word) => transliterateLatinWordToMarathi(word)));
-}
-
 function lastSlipNumberPart(slipNumber: string): string {
   const parts = slipNumber.split('-');
   return parts[parts.length - 1] ?? slipNumber;
@@ -1400,4 +1162,22 @@ function numberBelowThousandMarathi(value: number): string {
   }
 
   return parts.join(' ');
+}
+
+function objectFromJson(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function knownMandalMarathiName(value: string): string {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (normalized === 'bajirao road natubag mandal trust') {
+    return 'बाजीराव रोड नतुबग मंडळ ट्रस्ट';
+  }
+
+  return '';
 }

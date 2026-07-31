@@ -25,6 +25,7 @@ interface MandalListWhere {
     city?: { contains: string; mode: 'insensitive' };
     locality?: { contains: string; mode: 'insensitive' };
     name?: { contains: string; mode: 'insensitive' };
+    nameMr?: { contains: string; mode: 'insensitive' };
     slug?: { contains: string; mode: 'insensitive' };
   }>;
   status?: AccountStatus;
@@ -81,6 +82,7 @@ export class MandalsService {
         })
       : null;
     const templateBackgroundUrl = dto.defaultTemplateUrl ?? DEFAULT_TEMPLATE_BACKGROUND_URL;
+    const adminPasswordHash = await argon2.hash(dto.admin.password);
 
     return this.prisma.$transaction(async (tx) => {
       const mandal = await tx.mandal.create({
@@ -92,6 +94,7 @@ export class MandalsService {
           logoUrl: logoAsset?.url,
           locality: dto.locality,
           name: dto.name,
+          nameMr: dto.nameMr?.trim() || null,
           plan: dto.plan ?? 'starter',
           slug,
           state: dto.state,
@@ -104,7 +107,7 @@ export class MandalsService {
           email: dto.admin.email.toLowerCase(),
           mandalId: mandal.id,
           name: dto.admin.name,
-          passwordHash: await argon2.hash(dto.admin.password),
+          passwordHash: adminPasswordHash,
           phone: dto.admin.phone,
           role: UserRole.MANDAL_ADMIN,
           status: AccountStatus.ACTIVE,
@@ -149,7 +152,7 @@ export class MandalsService {
           ],
         },
       };
-    });
+    }, { timeout: 15000 });
   }
 
   async list(query: ListMandalsQueryDto) {
@@ -160,6 +163,7 @@ export class MandalsService {
     if (query.search) {
       where.OR = [
         { name: { contains: query.search, mode: 'insensitive' } },
+        { nameMr: { contains: query.search, mode: 'insensitive' } },
         { slug: { contains: query.search, mode: 'insensitive' } },
         { city: { contains: query.search, mode: 'insensitive' } },
         { locality: { contains: query.search, mode: 'insensitive' } },

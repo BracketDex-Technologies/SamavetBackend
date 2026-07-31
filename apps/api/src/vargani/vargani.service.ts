@@ -78,8 +78,9 @@ interface WhatsAppSlip {
   collectedByUserId: string;
   contributorName: string;
   contributorPhone: string | null;
+  customData?: unknown;
   id: string;
-  mandal: { name: string };
+  mandal: { name: string; nameMr?: string | null };
   mandalId: string;
   receiptImageUrl: string | null;
   slipNumber: string;
@@ -177,7 +178,7 @@ export class VarganiService {
       const existing = await this.prisma.varganiSlip.findUnique({
         include: {
           collector: { select: { id: true, name: true, phone: true } },
-          mandal: { select: { id: true, name: true } },
+          mandal: { select: { id: true, name: true, nameMr: true } },
         },
         where: { idempotencyKey: dto.idempotencyKey },
       });
@@ -195,7 +196,7 @@ export class VarganiService {
       const slip = await tx.varganiSlip.create({
         include: {
           collector: { select: { id: true, name: true, phone: true } },
-          mandal: { select: { id: true, name: true } },
+          mandal: { select: { id: true, name: true, nameMr: true } },
         },
         data: {
           amount: dto.amount,
@@ -292,7 +293,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true } },
+        mandal: { select: { id: true, name: true, nameMr: true } },
         templateVersion: true,
       },
       where: { id, mandalId },
@@ -428,7 +429,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true } },
+        mandal: { select: { id: true, name: true, nameMr: true } },
         templateVersion: true,
       },
       where: {
@@ -456,7 +457,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true } },
+        mandal: { select: { id: true, name: true, nameMr: true } },
         templateVersion: true,
       },
       where: {
@@ -512,11 +513,19 @@ export class VarganiService {
     preferredPhone: string | null | undefined,
     receiptUrl: string,
   ): Promise<WhatsAppSendResult> {
+    const customData = objectFromJson(slip.customData);
+    const mandalName =
+      readString(customData.mandalNameMr) ||
+      readString(customData.organizationNameMr) ||
+      readString(slip.mandal.nameMr) ||
+      knownMandalMarathiName(slip.mandal.name) ||
+      slip.mandal.name;
+
     const result = await this.whatsAppReceiptService.sendReceipt({
       contributorName: slip.contributorName,
-      mandalName: slip.mandal.name,
+      mandalName,
       mediaUrl: slip.receiptImageUrl,
-      organizationName: slip.mandal.name,
+      organizationName: mandalName,
       phone: preferredPhone || slip.contributorPhone,
       receiptUrl,
       slipNumber: slip.slipNumber,
@@ -1153,4 +1162,22 @@ function numberBelowThousandMarathi(value: number): string {
   }
 
   return parts.join(' ');
+}
+
+function objectFromJson(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function knownMandalMarathiName(value: string): string {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (normalized === 'bajirao road natubag mandal trust') {
+    return 'बाजीराव रोड नतुबग मंडळ ट्रस्ट';
+  }
+
+  return '';
 }

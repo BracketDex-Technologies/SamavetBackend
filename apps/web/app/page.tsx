@@ -180,7 +180,7 @@ export default function Home() {
     }
   }
 
-  async function _refreshActiveForm(currentSession = session) {
+  async function refreshActiveForm(currentSession = session) {
     if (!currentSession || currentSession.user.role === 'SUPER_ADMIN') {
       return;
     }
@@ -194,7 +194,7 @@ export default function Home() {
     setSelectedFestivalId(form.festival.id);
   }
 
-  async function _refreshSlips(currentSession = session) {
+  async function refreshSlips(currentSession = session) {
     if (!currentSession || currentSession.user.role === 'SUPER_ADMIN') {
       return;
     }
@@ -428,6 +428,7 @@ export default function Home() {
       setSlips((current) => [slip, ...current]);
       setSelectedSlip(slip);
       event.currentTarget.reset();
+      void refreshSlips(session);
       setNotice(`Slip ${slip.slipNumber} generated.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Could not generate slip.');

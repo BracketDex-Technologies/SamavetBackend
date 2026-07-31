@@ -8,6 +8,8 @@ const defaultCorsOrigins = [
   'https://samavet-frontend.vercel.app',
 ];
 
+const localOriginPattern = /localhost|127\.0\.0\.1/;
+
 const envBoolean = z.preprocess((value) => {
   if (typeof value === 'string') {
     const normalized = value.trim().toLowerCase();
@@ -78,16 +80,15 @@ export function validateAppConfig(config: Record<string, unknown>): AppConfig {
     ?.split(',')
     .map((origin) => origin.trim().replace(/\/$/, ''))
     .filter(Boolean);
-  const corsOrigins = Array.from(new Set(configuredOrigins?.length ? configuredOrigins : defaultCorsOrigins));
+  let corsOrigins =
+    parsed.data.NODE_ENV === 'production' && !configuredOrigins?.length
+      ? [parsed.data.PUBLIC_WEB_BASE_URL.replace(/\/$/, '')]
+      : Array.from(new Set(configuredOrigins?.length ? configuredOrigins : defaultCorsOrigins));
 
   if (parsed.data.NODE_ENV === 'production') {
-    if (!configuredOrigins?.length) {
-      throw new Error('Invalid environment configuration: CORS_ORIGINS is required in production.');
-    }
-    const unsafeOrigin = corsOrigins.find((origin) => /localhost|127\.0\.0\.1/.test(origin));
-    if (unsafeOrigin) {
-      throw new Error(`Invalid environment configuration: production CORS origin is local (${unsafeOrigin}).`);
-    }
+    corsOrigins = corsOrigins.filter((origin) => !localOriginPattern.test(origin));
+    corsOrigins = Array.from(new Set([parsed.data.PUBLIC_WEB_BASE_URL.replace(/\/$/, ''), ...corsOrigins]));
+
     if (parsed.data.JWT_ACCESS_SECRET === parsed.data.JWT_REFRESH_SECRET) {
       throw new Error('Invalid environment configuration: access and refresh JWT secrets must be different.');
     }

@@ -13,18 +13,18 @@ describe('validateAppConfig', () => {
     expect(config.SWAGGER_ENABLED).toBe(true);
   });
 
-  it('requires explicit production CORS origins', () => {
-    expect(() => validateAppConfig({ ...baseConfig, NODE_ENV: 'production' })).toThrow(
-      'CORS_ORIGINS is required in production',
-    );
+  it('falls back to the public web origin in production', () => {
+    const config = validateAppConfig({ ...baseConfig, NODE_ENV: 'production' });
+    expect(config.CORS_ORIGINS).toEqual(['https://epawati.samavet.in']);
   });
 
-  it('rejects local origins in production', () => {
-    expect(() => validateAppConfig({
+  it('removes local origins in production', () => {
+    const config = validateAppConfig({
       ...baseConfig,
       CORS_ORIGINS: 'http://localhost:5173',
       NODE_ENV: 'production',
-    })).toThrow('production CORS origin is local');
+    });
+    expect(config.CORS_ORIGINS).toEqual(['https://epawati.samavet.in']);
   });
 
   it('disables production Swagger by default', () => {

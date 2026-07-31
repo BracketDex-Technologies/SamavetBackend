@@ -22,6 +22,7 @@ import { UpdateCustomFieldDto } from './dto/update-custom-field.dto';
 const systemTemplateFields = new Set([
   'slipNumber',
   'contributorName',
+  'contributorNameMr',
   'contributorPhone',
   'contributorAddress',
   'shopName',
@@ -221,23 +222,24 @@ export class TemplatesService {
       folder: `mandals/${mandalId}/festivals/${festivalId}/templates`,
     });
 
-    await this.audit(ctx, mandalId, 'template_asset', asset.key ?? asset.url, 'uploaded', undefined, {
-      bucket: asset.bucket,
-      key: asset.key,
-      storage: asset.storage,
-      url: asset.url,
-    });
-
-    await this.jobsService.enqueue({
-      mandalId,
-      payload: {
+    await Promise.all([
+      this.audit(ctx, mandalId, 'template_asset', asset.key ?? asset.url, 'uploaded', undefined, {
         bucket: asset.bucket,
-        festivalId,
         key: asset.key,
         storage: asset.storage,
-      },
-      type: 'TEMPLATE_ASSET_AUDIT',
-    });
+        url: asset.url,
+      }),
+      this.jobsService.enqueue({
+        mandalId,
+        payload: {
+          bucket: asset.bucket,
+          festivalId,
+          key: asset.key,
+          storage: asset.storage,
+        },
+        type: 'TEMPLATE_ASSET_AUDIT',
+      }),
+    ]);
 
     return asset;
   }
@@ -249,8 +251,10 @@ export class TemplatesService {
     dto: SaveTemplateConfigDto,
   ) {
     assertSameMandal(ctx, mandalId);
-    await this.ensureFestival(mandalId, festivalId);
-    await this.validateRenderConfig(mandalId, festivalId, dto.renderConfig);
+    await Promise.all([
+      this.ensureFestival(mandalId, festivalId),
+      this.validateRenderConfig(mandalId, festivalId, dto.renderConfig),
+    ]);
 
     return this.prisma.$transaction(async (tx) => {
       const template =
@@ -274,25 +278,21 @@ export class TemplatesService {
       });
       const versionNumber = (latest._max.version ?? 0) + 1;
 
-      const version = await tx.slipTemplateVersion.create({
+      await tx.slipTemplateVersion.updateMany({
+        data: { isActive: false },
+        where: { templateId: template.id, isActive: true },
+      });
+
+      const activeVersion = await tx.slipTemplateVersion.create({
         data: {
           backgroundFileUrl: dto.backgroundFileUrl,
           canvasHeight: dto.canvasHeight,
           canvasWidth: dto.canvasWidth,
+          isActive: true,
           renderConfig: toJsonWriteValue(dto.renderConfig),
           templateId: template.id,
           version: versionNumber,
         },
-      });
-
-      await tx.slipTemplateVersion.updateMany({
-        data: { isActive: false },
-        where: { templateId: template.id },
-      });
-
-      const activeVersion = await tx.slipTemplateVersion.update({
-        data: { isActive: true },
-        where: { id: version.id },
       });
 
       const activeTemplate = await tx.slipTemplate.update({

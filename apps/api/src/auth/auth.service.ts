@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { AccountStatus, User } from '@prisma/client';
 import argon2 from 'argon2';
+import { randomUUID } from 'crypto';
 import { AppConfig } from '../config/app-config';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthContext } from './auth-context';
@@ -67,8 +68,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token.');
     }
 
-    await this.revokeSession(session.id);
-    return this.createSessionTokenPair(session.user, metadata);
+    return this.createSessionTokenPair(session.user, metadata, session.id);
   }
 
   async logout(ctx: AuthContext): Promise<void> {
@@ -135,26 +135,16 @@ export class AuthService {
     throw new UnauthorizedException('Session is no longer active.');
   }
 
-  private async createSessionTokenPair(user: User, metadata: SessionMetadata) {
-    const refreshExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    const session = await this.prisma.userSession.create({
-      data: {
-        expiresAt: refreshExpiresAt,
-        ipAddress: metadata.ipAddress,
-        refreshTokenHash: 'pending',
-        userAgent: metadata.userAgent,
-        userId: user.id,
-      },
-    });
-
+  private async createSessionTokenPair(user: User, metadata: SessionMetadata, existingSessionId?: string) {
+    const sessionId = existingSessionId ?? randomUUID();
     const payload: JwtPayload = {
       mandalId: user.mandalId,
       role: user.role,
-      sessionId: session.id,
+      sessionId,
       sub: user.id,
     };
     const refreshPayload: RefreshJwtPayload = {
-      sessionId: session.id,
+      sessionId,
       sub: user.id,
       type: 'refresh',
     };
@@ -170,13 +160,33 @@ export class AuthService {
       }),
     ]);
 
-    // Asynchronously hash the refresh token into session table to prevent blocking login HTTP response
-    void argon2.hash(refreshToken).then((hash) =>
-      this.prisma.userSession.update({
-        data: { refreshTokenHash: hash },
-        where: { id: session.id },
-      }),
-    ).catch(() => undefined);
+    const decoded = this.jwt.decode(refreshToken) as { exp?: number } | null;
+    const refreshExpiresAt = new Date((decoded?.exp ?? Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60) * 1000);
+    const refreshTokenHash = await argon2.hash(refreshToken);
+
+    if (existingSessionId) {
+      await this.prisma.userSession.update({
+        data: {
+          expiresAt: refreshExpiresAt,
+          ipAddress: metadata.ipAddress,
+          refreshTokenHash,
+          revokedAt: null,
+          userAgent: metadata.userAgent,
+        },
+        where: { id: existingSessionId },
+      });
+    } else {
+      await this.prisma.userSession.create({
+        data: {
+          expiresAt: refreshExpiresAt,
+          id: sessionId,
+          ipAddress: metadata.ipAddress,
+          refreshTokenHash,
+          userAgent: metadata.userAgent,
+          userId: user.id,
+        },
+      });
+    }
 
     return {
       accessToken,

@@ -4,6 +4,13 @@
   "private": true,
   "description": "Production platform for Digital Mandal festival management and Digital Vargani.",
   "packageManager": "pnpm@9.12.0",
+  "pnpm": {
+    "overrides": {
+      "js-yaml": "^5.2.2",
+      "postcss": "^8.5.18",
+      "sharp": "^0.35.0"
+    }
+  },
   "scripts": {
     "build": "pnpm --filter @digital-mandal/api build",
     "build:all": "pnpm -r build",

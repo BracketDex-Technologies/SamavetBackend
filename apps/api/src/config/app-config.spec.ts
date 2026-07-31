@@ -1,0 +1,49 @@
+import { validateAppConfig } from './app-config';
+
+const baseConfig = {
+  DATABASE_URL: 'postgresql://postgres:postgres@example.com:5432/postgres',
+  JWT_ACCESS_SECRET: 'access-secret-that-is-longer-than-thirty-two-characters',
+  JWT_REFRESH_SECRET: 'refresh-secret-that-is-longer-than-thirty-two-characters',
+};
+
+describe('validateAppConfig', () => {
+  it('uses safe development defaults', () => {
+    const config = validateAppConfig({ ...baseConfig, NODE_ENV: 'development' });
+    expect(config.CORS_ORIGINS).toContain('http://localhost:5173');
+    expect(config.SWAGGER_ENABLED).toBe(true);
+  });
+
+  it('requires explicit production CORS origins', () => {
+    expect(() => validateAppConfig({ ...baseConfig, NODE_ENV: 'production' })).toThrow(
+      'CORS_ORIGINS is required in production',
+    );
+  });
+
+  it('rejects local origins in production', () => {
+    expect(() => validateAppConfig({
+      ...baseConfig,
+      CORS_ORIGINS: 'http://localhost:5173',
+      NODE_ENV: 'production',
+    })).toThrow('production CORS origin is local');
+  });
+
+  it('disables production Swagger by default', () => {
+    const config = validateAppConfig({
+      ...baseConfig,
+      CORS_ORIGINS: 'https://epawati.samavet.in',
+      NODE_ENV: 'production',
+    });
+    expect(config.SWAGGER_ENABLED).toBe(false);
+  });
+
+  it('parses false-like environment strings as false', () => {
+    const config = validateAppConfig({
+      ...baseConfig,
+      AUTHKEY_WHATSAPP_ENABLED: 'false',
+      NODE_ENV: 'development',
+      SWAGGER_ENABLED: '0',
+    });
+    expect(config.AUTHKEY_WHATSAPP_ENABLED).toBe(false);
+    expect(config.SWAGGER_ENABLED).toBe(false);
+  });
+});

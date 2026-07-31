@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { AuthUser } from './decorators/auth-user.decorator';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthContext } from './auth-context';
@@ -24,6 +25,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ description: 'Returns access and refresh tokens.' })
   async login(
@@ -38,6 +40,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ description: 'Rotates refresh token and returns a new token pair.' })
   async refresh(

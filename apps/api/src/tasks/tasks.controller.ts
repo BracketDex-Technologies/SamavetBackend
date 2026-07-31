@@ -30,7 +30,7 @@ export class TasksController {
   }
 
   @Get()
-  @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER)
+  @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER, UserRole.MEMBER)
   @ApiOkResponse({ description: 'Festival task list.' })
   listTasks(
     @AuthUser() ctx: AuthContext,
@@ -41,7 +41,7 @@ export class TasksController {
   }
 
   @Patch(':taskId')
-  @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER)
+  @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER, UserRole.MEMBER)
   @ApiOkResponse({ description: 'Task updated.' })
   updateTask(
     @AuthUser() ctx: AuthContext,

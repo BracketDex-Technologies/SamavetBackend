@@ -34,34 +34,30 @@ export class JobsService {
   }
 
   async claimNext(workerId: string) {
-    const [job] = await this.prisma.$transaction(async (tx) => {
-      const candidates = await tx.backgroundJob.findMany({
-        orderBy: [{ runAfter: 'asc' }, { createdAt: 'asc' }],
-        take: 1,
-        where: {
-          attempts: { lt: 3 },
-          runAfter: { lte: new Date() },
-          status: 'QUEUED',
-        },
-      });
-      const candidate = candidates[0];
-      if (!candidate) return [];
-
-      return [
-        await tx.backgroundJob.update({
-          data: {
-            attempts: { increment: 1 },
-            lockedAt: new Date(),
-            lockedBy: workerId,
-            startedAt: new Date(),
-            status: 'PROCESSING',
-          },
-          where: { id: candidate.id },
-        }),
-      ];
-    });
-
-    return job ?? null;
+    // SKIP LOCKED makes this safe when several API/worker instances scale out.
+    const [claimed] = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      WITH candidate AS (
+        SELECT id
+        FROM "background_jobs"
+        WHERE status = 'QUEUED'
+          AND "run_after" <= now()
+          AND attempts < "max_attempts"
+        ORDER BY "run_after" ASC, "created_at" ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      )
+      UPDATE "background_jobs" AS job
+      SET attempts = job.attempts + 1,
+          "locked_at" = now(),
+          "locked_by" = ${workerId},
+          "started_at" = now(),
+          status = 'PROCESSING',
+          "updated_at" = now()
+      FROM candidate
+      WHERE job.id = candidate.id
+      RETURNING job.id
+    `;
+    return claimed ? this.prisma.backgroundJob.findUnique({ where: { id: claimed.id } }) : null;
   }
 
   async complete(id: string) {

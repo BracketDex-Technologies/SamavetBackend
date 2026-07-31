@@ -9,6 +9,7 @@ import { CreateMandalUserDto } from './dto/create-mandal-user.dto';
 import { ListMandalsQueryDto } from './dto/list-mandals-query.dto';
 import { DEFAULT_TEMPLATE_BACKGROUND_URL, ensureDefaultMandalWorkspace } from './mandal-defaults';
 import { UpdateMandalUserDto } from './dto/update-mandal-user.dto';
+import { UpdateMandalDto } from './dto/update-mandal.dto';
 import { UpdateMandalStatusDto } from './dto/update-mandal-status.dto';
 
 type JsonWriteValue = never;
@@ -96,9 +97,11 @@ export class MandalsService {
           name: dto.name,
           nameMr: dto.nameMr?.trim() || null,
           plan: dto.plan ?? 'starter',
+          slipLimit: dto.slipLimit,
           slug,
           state: dto.state,
           status: AccountStatus.ACTIVE,
+          whatsappMode: dto.whatsappMode ?? 'AUTO_API',
         },
       });
 
@@ -347,6 +350,48 @@ export class MandalsService {
     return updated;
   }
 
+  async updateMandal(id: string, dto: UpdateMandalDto) {
+    const before = await this.ensureMandalExists(id);
+    const logoAsset = dto.logoDataUrl
+      ? await this.storageService.uploadDataUrl({
+          dataUrl: dto.logoDataUrl,
+          fileName: `${before.id}-logo`,
+          folder: `mandals/${before.id}/logo`,
+        })
+      : null;
+
+    const updated = await this.prisma.mandal.update({
+      data: {
+        address: dto.address,
+        city: dto.city,
+        contactName: dto.contactName,
+        contactPhone: dto.contactPhone,
+        locality: dto.locality,
+        logoUrl: logoAsset?.url,
+        name: dto.name,
+        nameMr: dto.nameMr,
+        plan: dto.plan,
+        slipLimit: dto.slipLimit,
+        state: dto.state,
+        whatsappMode: dto.whatsappMode,
+      },
+      where: { id },
+    });
+
+    await this.prisma.auditEvent.create({
+      data: {
+        action: 'mandal_updated',
+        after: this.toJson(updated),
+        before: this.toJson(before),
+        entityId: id,
+        entityType: 'mandal',
+        mandalId: id,
+      },
+    });
+
+    return updated;
+  }
+
   async deleteMandal(id: string) {
     const mandal = await this.prisma.mandal.findUnique({ where: { id } });
 
@@ -479,6 +524,10 @@ export class MandalsService {
       where: { id: userId },
     });
 
+    if (dto.password) {
+      await this.prisma.userSession.deleteMany({ where: { userId } });
+    }
+
     await this.prisma.auditEvent.create({
       data: {
         action: 'user_updated',
@@ -576,7 +625,6 @@ export class MandalsService {
 
   private async ensureMandalExists(id: string) {
     const mandal = await this.prisma.mandal.findFirst({
-      select: { id: true },
       where: { id, status: AccountStatus.ACTIVE },
     });
 

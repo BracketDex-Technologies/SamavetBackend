@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ConfigService } from '@nestjs/config';
 import { join } from 'path';
 import { AuditModule } from './audit/audit.module';
 import { validateAppConfig } from './config/app-config';
@@ -29,12 +30,13 @@ import { WorkspaceModule } from './workspace/workspace.module';
       isGlobal: true,
       validate: validateAppConfig,
     }),
-    ThrottlerModule.forRoot([
-      {
-        ttl: 60_000,
-        limit: 120,
-      },
-    ]),
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => [{
+        ttl: config.get<number>('RATE_LIMIT_TTL_MS') ?? 60_000,
+        limit: config.get<number>('RATE_LIMIT_MAX') ?? 120,
+      }],
+    }),
     PrismaModule,
     AuthModule,
     MandalsModule,

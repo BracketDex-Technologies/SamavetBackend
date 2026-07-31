@@ -8,6 +8,7 @@ import { CreateMandalDto } from './dto/create-mandal.dto';
 import { CreateMandalUserDto } from './dto/create-mandal-user.dto';
 import { ListMandalsQueryDto } from './dto/list-mandals-query.dto';
 import { UpdateMandalUserDto } from './dto/update-mandal-user.dto';
+import { UpdateMandalDto } from './dto/update-mandal.dto';
 import { UpdateMandalStatusDto } from './dto/update-mandal-status.dto';
 import { MandalsService } from './mandals.service';
 
@@ -44,6 +45,13 @@ export class MandalsController {
   @ApiOkResponse({ description: 'All login accounts for a mandal.' })
   listUsers(@Param('id') id: string) {
     return this.mandalsService.listUsers(id);
+  }
+
+  @Patch(':id')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOkResponse({ description: 'Mandal details updated.' })
+  updateMandal(@Param('id') id: string, @Body() dto: UpdateMandalDto) {
+    return this.mandalsService.updateMandal(id, dto);
   }
 
   @Delete(':id')

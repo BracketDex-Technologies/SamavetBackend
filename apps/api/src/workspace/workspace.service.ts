@@ -147,6 +147,7 @@ export class WorkspaceService {
           festivals: {
             orderBy: { startDate: 'desc' },
             select: {
+              customFields: { orderBy: { sortOrder: 'asc' } },
               id: true,
               name: true,
               status: true,
@@ -222,8 +223,6 @@ export class WorkspaceService {
       activeFestival = setup.activeFestival;
     }
 
-    await this.repairGroupLeaderAssignments(mandalId, activeFestival.id);
-
     const isCollectorWorkspace = ctx.role === UserRole.MEMBER || ctx.role === UserRole.GROUP_LEADER;
     const visibleSlipWhere: Prisma.VarganiSlipWhereInput = {
       collectedByUserId: isCollectorWorkspace ? ctx.userId : undefined,
@@ -257,13 +256,12 @@ export class WorkspaceService {
       activeSlipAmount,
       pendingSlipAmount,
       approvedExpenseAmount,
-      paidCollectors,
-      collectionSlips,
+      collectionStats,
       memberTotal,
       users,
       auditEvents,
-    ] = await this.prisma.$transaction([
-      this.prisma.member.findFirst({
+    ] = await Promise.all([
+      isCollectorWorkspace ? this.prisma.member.findFirst({
         include: { group: true },
         where: {
           festivalId: activeFestival.id,
@@ -272,7 +270,7 @@ export class WorkspaceService {
           user: { status: AccountStatus.ACTIVE },
           userId: ctx.userId,
         },
-      }),
+      }) : Promise.resolve(null),
       this.prisma.customField.findMany({
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
         where: { festivalId: activeFestival.id, mandalId },
@@ -329,6 +327,7 @@ export class WorkspaceService {
         include: {
           versions: {
             orderBy: { version: 'desc' },
+            take: 5,
           },
         },
         orderBy: { updatedAt: 'desc' },
@@ -358,21 +357,14 @@ export class WorkspaceService {
         _sum: { amount: true },
         where: { festivalId: activeFestival.id, mandalId, status: ExpenseStatus.APPROVED },
       }),
-      this.prisma.varganiSlip.findMany({
-        distinct: ['collectedByUserId'],
-        select: { collectedByUserId: true },
-        where: activeSlipWhere,
-      }),
-      this.prisma.varganiSlip.findMany({
-        select: {
-          amount: true,
-          collectedByUserId: true,
-          groupId: true,
-        },
+      this.prisma.varganiSlip.groupBy({
+        by: ['collectedByUserId', 'groupId'],
+        _count: { _all: true },
+        _sum: { amount: true },
         where: activeSlipWhere,
       }),
       this.prisma.member.count({ where: memberCountWhere }),
-      this.prisma.user.findMany({
+      isCollectorWorkspace ? Promise.resolve([]) : this.prisma.user.findMany({
         orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
         select: {
           createdAt: true,
@@ -385,11 +377,9 @@ export class WorkspaceService {
           status: true,
         },
         take: 50,
-        where: isCollectorWorkspace
-          ? { id: ctx.userId, mandalId, status: AccountStatus.ACTIVE }
-          : { mandalId, status: AccountStatus.ACTIVE },
+        where: { mandalId, status: AccountStatus.ACTIVE },
       }),
-      this.prisma.auditEvent.findMany({
+      isCollectorWorkspace ? Promise.resolve([]) : this.prisma.auditEvent.findMany({
         orderBy: { createdAt: 'desc' },
         take: 25,
         where: { mandalId },
@@ -398,28 +388,29 @@ export class WorkspaceService {
 
     const totalCollection = Number(activeSlipAmount._sum.amount ?? 0);
     const totalExpenses = Number(approvedExpenseAmount._sum.amount ?? 0);
-    const memberPaidCount = paidCollectors.length;
+    const memberPaidCount = new Set(collectionStats.map((row) => row.collectedByUserId)).size;
     const groupStats = new Map<string, { collectionTotal: number; paidSlipCount: number }>();
     const memberStats = new Map<string, { collectionTotal: number; paidSlipCount: number }>();
     const memberGroupByUser = new Map(members.map((member) => [member.userId, member.groupId]));
 
-    collectionSlips.forEach((slip) => {
-      const amount = Number(slip.amount ?? 0);
-      const collectorHasMemberProfile = memberGroupByUser.has(slip.collectedByUserId);
-      const currentCollectorGroupId = memberGroupByUser.get(slip.collectedByUserId);
-      const groupId = collectorHasMemberProfile ? currentCollectorGroupId : slip.groupId;
+    collectionStats.forEach((row) => {
+      const amount = Number(row._sum.amount ?? 0);
+      const slipCount = row._count._all;
+      const collectorHasMemberProfile = memberGroupByUser.has(row.collectedByUserId);
+      const currentCollectorGroupId = memberGroupByUser.get(row.collectedByUserId);
+      const groupId = collectorHasMemberProfile ? currentCollectorGroupId : row.groupId;
       if (groupId) {
         const current = groupStats.get(groupId) ?? { collectionTotal: 0, paidSlipCount: 0 };
         groupStats.set(groupId, {
           collectionTotal: current.collectionTotal + amount,
-          paidSlipCount: current.paidSlipCount + 1,
+          paidSlipCount: current.paidSlipCount + slipCount,
         });
       }
 
-      const current = memberStats.get(slip.collectedByUserId) ?? { collectionTotal: 0, paidSlipCount: 0 };
-      memberStats.set(slip.collectedByUserId, {
+      const current = memberStats.get(row.collectedByUserId) ?? { collectionTotal: 0, paidSlipCount: 0 };
+      memberStats.set(row.collectedByUserId, {
         collectionTotal: current.collectionTotal + amount,
-        paidSlipCount: current.paidSlipCount + 1,
+        paidSlipCount: current.paidSlipCount + slipCount,
       });
     });
     const groupsWithStats = groups.map((group) => ({
@@ -501,71 +492,6 @@ export class WorkspaceService {
     };
   }
 
-  private async repairGroupLeaderAssignments(mandalId: string, festivalId: string) {
-    const groups = await this.prisma.memberGroup.findMany({
-      select: { id: true, leaderUserId: true },
-      where: {
-        festivalId,
-        leaderUserId: { not: null },
-        mandalId,
-      },
-    });
-
-    await this.prisma.$transaction(async (tx) => {
-      const validLeaderUserIds: string[] = [];
-
-      for (const group of groups) {
-        if (!group.leaderUserId) continue;
-
-        const leaderMember = await tx.member.findFirst({
-          where: {
-            festivalId,
-            mandalId,
-            status: AccountStatus.ACTIVE,
-            user: { status: AccountStatus.ACTIVE },
-            userId: group.leaderUserId,
-          },
-        });
-
-        if (!leaderMember) {
-          await tx.memberGroup.update({
-            data: { leaderUserId: null },
-            where: { id: group.id },
-          });
-          continue;
-        }
-
-        validLeaderUserIds.push(group.leaderUserId);
-
-        if (leaderMember.groupId !== group.id) {
-          await tx.member.update({
-            data: { groupId: group.id },
-            where: { id: leaderMember.id },
-          });
-        }
-
-        await tx.user.update({
-          data: { role: UserRole.GROUP_LEADER },
-          where: { id: group.leaderUserId },
-        });
-      }
-
-      const downgradeWhere: Prisma.UserWhereInput = {
-        mandalId,
-        memberProfiles: { some: { festivalId, mandalId } },
-        role: UserRole.GROUP_LEADER,
-      };
-      if (validLeaderUserIds.length > 0) {
-        downgradeWhere.id = { notIn: validLeaderUserIds };
-      }
-
-      await tx.user.updateMany({
-        data: { role: UserRole.MEMBER },
-        where: downgradeWhere,
-      });
-    });
-  }
-
   private getUser(userId: string) {
     return this.prisma.user.findUnique({
       select: {
@@ -606,18 +532,6 @@ export class WorkspaceService {
       );
     }
   }
-}
-
-function emptyReport() {
-  return {
-    balance: 0,
-    byGroup: [],
-    byMember: [],
-    byPaymentMode: [],
-    slipCount: 0,
-    totalCollection: 0,
-    totalExpenses: 0,
-  };
 }
 
 function emptyMandalMetrics() {

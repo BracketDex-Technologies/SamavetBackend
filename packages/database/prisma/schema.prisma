@@ -99,6 +99,8 @@ model Mandal {
   state        String?
   contactName  String?       @map("contact_name")
   contactPhone String?       @map("contact_phone")
+  slipLimit    Int?          @map("slip_limit")
+  whatsappMode String        @default("AUTO_API") @map("whatsapp_mode")
   status       AccountStatus @default(ACTIVE)
   plan         String        @default("starter")
   createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)

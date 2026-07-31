@@ -141,7 +141,10 @@ export class MembersService {
     });
 
     if (existingUser && !this.canReclaimLogin(existingUser)) {
-      throw new ConflictException('Member email or phone already exists.');
+      const emailExists = Boolean(dto.email && existingUser.email?.toLowerCase() === dto.email.toLowerCase());
+      const phoneExists = Boolean(dto.phone && existingUser.phone === dto.phone);
+      const duplicate = emailExists && phoneExists ? 'this email and mobile number' : emailExists ? 'this email' : 'this mobile number';
+      throw new ConflictException(`Account is already present for ${duplicate}. Sign in with the existing account or use different details.`);
     }
 
     return this.prisma.$transaction(async (tx) => {

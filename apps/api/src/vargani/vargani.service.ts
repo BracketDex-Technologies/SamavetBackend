@@ -141,54 +141,68 @@ export class VarganiService {
   async createSlip(ctx: AuthContext, dto: CreateVarganiSlipDto) {
     const mandalId = requireMandalId(ctx);
     const festival = await this.getActiveFestival(mandalId);
-    const member = await this.prisma.member.findFirst({
-      where: {
-        festivalId: festival.id,
-        mandalId,
-        status: AccountStatus.ACTIVE,
-        user: { status: AccountStatus.ACTIVE },
-        userId: ctx.userId,
-      },
-    });
+    const canAssignGroup = ctx.role === UserRole.MANDAL_ADMIN || ctx.role === UserRole.KHAJINDAR;
+    const [member, customFields, existing, requestedGroup] = await Promise.all([
+      this.prisma.member.findFirst({
+        where: {
+          festivalId: festival.id,
+          mandalId,
+          status: AccountStatus.ACTIVE,
+          user: { status: AccountStatus.ACTIVE },
+          userId: ctx.userId,
+        },
+      }),
+      this.prisma.customField.findMany({
+        where: { festivalId: festival.id, mandalId },
+      }),
+      dto.idempotencyKey
+        ? this.prisma.varganiSlip.findUnique({
+            include: {
+              collector: { select: { id: true, name: true, phone: true } },
+              mandal: { select: { id: true, name: true, nameMr: true } },
+            },
+            where: { idempotencyKey: dto.idempotencyKey },
+          })
+        : Promise.resolve(null),
+      dto.groupId && canAssignGroup
+        ? this.prisma.memberGroup.findFirst({
+            where: { festivalId: festival.id, id: dto.groupId, mandalId },
+          })
+        : Promise.resolve(null),
+    ]);
 
     if (!member && isCollectorRole(ctx.role)) {
       throw new ForbiddenException('Member is not assigned to the active festival.');
     }
 
     let groupId = member?.groupId ?? null;
-    const canAssignGroup = ctx.role === UserRole.MANDAL_ADMIN || ctx.role === UserRole.KHAJINDAR;
     if (dto.groupId && canAssignGroup) {
-      const group = await this.prisma.memberGroup.findFirst({
-        where: { festivalId: festival.id, id: dto.groupId, mandalId },
-      });
-
-      if (!group) {
+      if (!requestedGroup) {
         throw new NotFoundException('Collection group not found.');
       }
 
-      groupId = group.id;
+      groupId = requestedGroup.id;
     }
 
-    const customFields = await this.prisma.customField.findMany({
-      where: { festivalId: festival.id, mandalId },
-    });
     this.validateCustomData(customFields, dto.customData ?? {});
 
-    if (dto.idempotencyKey) {
-      const existing = await this.prisma.varganiSlip.findUnique({
-        include: {
-          collector: { select: { id: true, name: true, phone: true } },
-          mandal: { select: { id: true, name: true, nameMr: true } },
-        },
-        where: { idempotencyKey: dto.idempotencyKey },
-      });
-
-      if (existing) {
-        return existing;
-      }
+    if (existing) {
+      return existing;
     }
 
     const slip = await this.prisma.$transaction(async (tx) => {
+      const [mandalQuota] = await tx.$queryRaw<Array<{ slipLimit: number | null }>>`
+        SELECT "slip_limit" AS "slipLimit" FROM mandals WHERE id = ${mandalId}::uuid FOR UPDATE
+      `;
+      const generatedSlipCount = mandalQuota?.slipLimit
+        ? await tx.varganiSlip.count({ where: { mandalId } })
+        : 0;
+      if (mandalQuota?.slipLimit && generatedSlipCount >= mandalQuota.slipLimit) {
+        throw new ForbiddenException(
+          `Slip generation limit of ${mandalQuota.slipLimit} has been reached. Contact Super Admin to generate more slips.`,
+        );
+      }
+
       const nextValue = await this.nextSlipSequence(tx, mandalId, festival.id);
       const slipStatus = dto.status === SlipStatus.PENDING ? SlipStatus.PENDING : SlipStatus.ACTIVE;
       const slipNumber = `DM-${festival.type.slice(0, 3).toUpperCase()}-${new Date(festival.startDate).getFullYear()}-${String(nextValue).padStart(6, '0')}`;
@@ -234,7 +248,7 @@ export class VarganiService {
     });
 
     if (slip.status === SlipStatus.ACTIVE) {
-      await this.jobsService.enqueue({
+      void this.jobsService.enqueue({
         mandalId,
         payload: {
           festivalId: festival.id,
@@ -243,7 +257,7 @@ export class VarganiService {
           templateVersionId: slip.templateVersionId,
         },
         type: 'RENDER_RECEIPT',
-      });
+      }).catch(() => undefined);
     }
 
     return slip;
@@ -293,7 +307,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true, nameMr: true } },
+        mandal: { select: { id: true, name: true, nameMr: true, whatsappMode: true } },
         templateVersion: true,
       },
       where: { id, mandalId },
@@ -406,6 +420,17 @@ export class VarganiService {
       type: 'WHATSAPP_SHARE_AUDIT',
     });
 
+    if (slip.mandal.whatsappMode === 'MANUAL_SHARE') {
+      return {
+        auditEventId: event.id,
+        expiresAt: shareTokenExpiresAt,
+        ok: true,
+        receiptUrl,
+        sharedAt: event.createdAt,
+        whatsapp: { ok: true, reason: 'manual_share', status: 'skipped', receiptUrl },
+      };
+    }
+
     const whatsappPromise = this.sendSlipToWhatsApp(slip, dto.phone, receiptUrl);
     // Unhandled errors caught silently in background, caller returns immediately
     void whatsappPromise.catch((err) =>
@@ -429,7 +454,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true, nameMr: true } },
+        mandal: { select: { id: true, name: true, nameMr: true, whatsappMode: true } },
         templateVersion: true,
       },
       where: {
@@ -457,7 +482,7 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true, nameMr: true } },
+        mandal: { select: { id: true, name: true, nameMr: true, whatsappMode: true } },
         templateVersion: true,
       },
       where: {

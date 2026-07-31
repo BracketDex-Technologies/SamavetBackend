@@ -2,6 +2,8 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDefined,
   IsEmail,
+  IsIn,
+  IsInt,
   IsOptional,
   IsPhoneNumber,
   IsString,
@@ -9,6 +11,7 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -82,6 +85,17 @@ export class CreateMandalDto {
   @IsString()
   @MaxLength(80)
   plan?: string;
+
+  @ApiPropertyOptional({ description: 'Maximum number of slips this Mandal can generate.', example: 1000 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  slipLimit?: number;
+
+  @ApiPropertyOptional({ enum: ['AUTO_API', 'MANUAL_SHARE'], example: 'AUTO_API' })
+  @IsOptional()
+  @IsIn(['AUTO_API', 'MANUAL_SHARE'])
+  whatsappMode?: 'AUTO_API' | 'MANUAL_SHARE';
 
   @ApiPropertyOptional({ example: 'Rahul Shinde' })
   @IsOptional()

@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: samavetbackend
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health/live
+    maxShutdownDelaySeconds: 30
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_GLOBAL_PREFIX
+        value: api
+      - key: TRUST_PROXY
+        value: 1
+      - key: SWAGGER_ENABLED
+        value: false
+      - key: CORS_ORIGINS
+        value: https://epawati.samavet.in
+      - key: PUBLIC_WEB_BASE_URL
+        value: https://epawati.samavet.in
+      - key: PUBLIC_API_BASE_URL
+        value: https://samavetbackend.onrender.com/api/v1
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: AUTHKEY_API_KEY
+        sync: false
+      - key: AUTHKEY_WHATSAPP_ENABLED
+        sync: false
+      - key: AUTHKEY_WHATSAPP_RECEIPT_WID
+        sync: false

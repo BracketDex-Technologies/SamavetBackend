@@ -51,13 +51,15 @@ export class WhatsAppReceiptService {
     const organizationName = input.organizationName?.trim() || input.mandalName.trim();
     const mandalName = input.mandalName.trim();
     const payload = {
+      country_code: this.config.get('AUTHKEY_WHATSAPP_COUNTRY_CODE', { infer: true }).trim() || '91',
+      mobile: phone,
+      wid,
+      type: templateType,
       bodyValues: {
         var1: contributorName,
         var2: organizationName,
         var3: mandalName,
       },
-      authkey,
-      country_code: this.config.get('AUTHKEY_WHATSAPP_COUNTRY_CODE', { infer: true }).trim() || '91',
       ...(templateType === 'media'
         ? {
             headerValues: {
@@ -67,13 +69,9 @@ export class WhatsAppReceiptService {
             },
           }
         : {}),
-      mobile: phone,
-      type: templateType,
-      var1: contributorName,
-      var2: organizationName,
-      var3: mandalName,
-      wid,
     };
+
+    this.logger.log(`Authkey WhatsApp payload for ${input.slipNumber}: ${JSON.stringify(payload)}`);
 
     try {
       const response = await fetch('https://console.authkey.io/restapi/requestjson.php', {
@@ -86,6 +84,7 @@ export class WhatsAppReceiptService {
       });
 
       const responseText = await response.text();
+      this.logger.log(`Authkey WhatsApp response for ${input.slipNumber}: ${response.status} ${responseText}`);
       if (!response.ok) {
         this.logger.warn(`Authkey WhatsApp failed for ${input.slipNumber}: ${response.status} ${responseText}`);
         return { ok: false, provider: 'AUTHKEY', reason: `authkey_http_${response.status}`, status: 'failed' };

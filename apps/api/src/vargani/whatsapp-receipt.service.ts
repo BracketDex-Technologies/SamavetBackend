@@ -56,9 +56,9 @@ export class WhatsAppReceiptService {
       wid,
       type: templateType,
       bodyValues: {
-        var1: contributorName,
-        var2: organizationName,
-        var3: mandalName,
+        '1': contributorName,
+        '2': organizationName,
+        '3': mandalName,
       },
       ...(templateType === 'media'
         ? {

@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { AccountStatus, User } from '@prisma/client';
 import argon2 from 'argon2';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthContext } from './auth-context';
@@ -61,7 +61,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token.');
     }
 
-    const tokenMatches = await argon2.verify(session.refreshTokenHash, refreshToken);
+    const tokenMatches = await verifyRefreshTokenHash(session.refreshTokenHash, refreshToken);
 
     if (!tokenMatches) {
       await this.revokeSession(session.id);
@@ -162,7 +162,10 @@ export class AuthService {
 
     const decoded = this.jwt.decode(refreshToken) as { exp?: number } | null;
     const refreshExpiresAt = new Date((decoded?.exp ?? Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60) * 1000);
-    const refreshTokenHash = await argon2.hash(refreshToken);
+    // Refresh tokens are signed, high-entropy secrets. A fast one-way digest is
+    // sufficient here and avoids a second memory-heavy Argon2 operation on every
+    // login/refresh. Passwords continue to use Argon2.
+    const refreshTokenHash = hashRefreshToken(refreshToken);
 
     if (existingSessionId) {
       await this.prisma.userSession.update({
@@ -176,16 +179,27 @@ export class AuthService {
         where: { id: existingSessionId },
       });
     } else {
-      await this.prisma.userSession.create({
-        data: {
-          expiresAt: refreshExpiresAt,
-          id: sessionId,
-          ipAddress: metadata.ipAddress,
-          refreshTokenHash,
-          userAgent: metadata.userAgent,
-          userId: user.id,
-        },
-      });
+      await this.prisma.$transaction([
+        this.prisma.userSession.create({
+          data: {
+            expiresAt: refreshExpiresAt,
+            id: sessionId,
+            ipAddress: metadata.ipAddress,
+            refreshTokenHash,
+            userAgent: metadata.userAgent,
+            userId: user.id,
+          },
+        }),
+        // The (userId, expiresAt) index makes this a bounded per-user cleanup
+        // instead of allowing expired sessions to accumulate indefinitely.
+        this.prisma.userSession.deleteMany({
+          where: {
+            expiresAt: { lte: new Date() },
+            id: { not: sessionId },
+            userId: user.id,
+          },
+        }),
+      ]);
     }
 
     return {
@@ -203,11 +217,11 @@ export class AuthService {
   private async findLoginUser(identifier: string) {
     const normalized = identifier.trim().toLowerCase();
 
-    return this.prisma.user.findFirst({
-      where: {
-        OR: [{ email: normalized }, { phone: identifier.trim() }],
-      },
-    });
+    // Both fields are unique database indexes. Avoiding an OR query gives the
+    // planner one direct index lookup on this high-traffic endpoint.
+    return normalized.includes('@')
+      ? this.prisma.user.findUnique({ where: { email: normalized } })
+      : this.prisma.user.findUnique({ where: { phone: identifier.trim() } });
   }
 
   private async revokeSession(sessionId: string): Promise<void> {
@@ -230,5 +244,27 @@ export class AuthService {
     }
 
     return payload;
+  }
+}
+
+const REFRESH_TOKEN_HASH_PREFIX = 'sha256:';
+
+function hashRefreshToken(refreshToken: string): string {
+  return `${REFRESH_TOKEN_HASH_PREFIX}${createHash('sha256').update(refreshToken).digest('hex')}`;
+}
+
+async function verifyRefreshTokenHash(storedHash: string, refreshToken: string): Promise<boolean> {
+  if (storedHash.startsWith(REFRESH_TOKEN_HASH_PREFIX)) {
+    const expected = Buffer.from(storedHash.slice(REFRESH_TOKEN_HASH_PREFIX.length), 'hex');
+    const actual = createHash('sha256').update(refreshToken).digest();
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+  }
+
+  // Existing sessions were stored with Argon2. They remain valid and are
+  // automatically upgraded to SHA-256 when refresh rotates the token.
+  try {
+    return await argon2.verify(storedHash, refreshToken);
+  } catch {
+    return false;
   }
 }

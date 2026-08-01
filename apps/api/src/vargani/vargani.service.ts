@@ -10,6 +10,7 @@ import {
   AccountStatus,
   CustomFieldType,
   FestivalStatus,
+  Prisma,
   RenderStatus,
   SlipStatus,
   UserRole,
@@ -144,6 +145,7 @@ export class VarganiService {
     const canAssignGroup = ctx.role === UserRole.MANDAL_ADMIN || ctx.role === UserRole.KHAJINDAR;
     const [member, customFields, existing, requestedGroup] = await Promise.all([
       this.prisma.member.findFirst({
+        select: { areaName: true, groupId: true },
         where: {
           festivalId: festival.id,
           mandalId,
@@ -153,6 +155,7 @@ export class VarganiService {
         },
       }),
       this.prisma.customField.findMany({
+        select: { key: true, label: true, required: true, type: true },
         where: { festivalId: festival.id, mandalId },
       }),
       dto.idempotencyKey
@@ -166,6 +169,7 @@ export class VarganiService {
         : Promise.resolve(null),
       dto.groupId && canAssignGroup
         ? this.prisma.memberGroup.findFirst({
+            select: { id: true },
             where: { festivalId: festival.id, id: dto.groupId, mandalId },
           })
         : Promise.resolve(null),
@@ -190,6 +194,7 @@ export class VarganiService {
       return existing;
     }
 
+    let shouldEnqueueRender = true;
     const slip = await this.prisma.$transaction(async (tx) => {
       const [mandalQuota] = await tx.$queryRaw<Array<{ slipLimit: number | null }>>`
         SELECT "slip_limit" AS "slipLimit" FROM mandals WHERE id = ${mandalId}::uuid FOR UPDATE
@@ -233,10 +238,13 @@ export class VarganiService {
         },
       });
 
+      const { collector: _collector, mandal: _mandal, ...auditSlip } = slip;
       await tx.auditEvent.create({
         data: {
           action: 'created',
-          after: toJsonWriteValue(slip),
+          // Preserve the full scalar audit snapshot while avoiding duplicated
+          // mandal and collector relationship objects on every high-volume row.
+          after: toJsonWriteValue(auditSlip),
           actorUserId: ctx.userId,
           entityId: slip.id,
           entityType: 'vargani_slip',
@@ -245,9 +253,24 @@ export class VarganiService {
       });
 
       return slip;
+    }).catch(async (error: unknown) => {
+      if (dto.idempotencyKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const concurrentSlip = await this.prisma.varganiSlip.findUnique({
+          include: {
+            collector: { select: { id: true, name: true, phone: true } },
+            mandal: { select: { id: true, name: true, nameMr: true } },
+          },
+          where: { idempotencyKey: dto.idempotencyKey },
+        });
+        if (concurrentSlip) {
+          shouldEnqueueRender = false;
+          return concurrentSlip;
+        }
+      }
+      throw error;
     });
 
-    if (slip.status === SlipStatus.ACTIVE) {
+    if (slip.status === SlipStatus.ACTIVE && shouldEnqueueRender) {
       void this.jobsService.enqueue({
         mandalId,
         payload: {

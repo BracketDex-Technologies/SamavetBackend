@@ -120,7 +120,7 @@ export class WorkspaceService {
       ],
     };
 
-    const [mandalRows, totalMandals, totalMembers, totalSlips] = await this.prisma.$transaction([
+    const [mandalRows, totalMandals, totalMembers, totalSlips, user] = await this.prisma.$transaction([
       this.prisma.mandal.findMany({
         include: {
           _count: {
@@ -175,6 +175,7 @@ export class WorkspaceService {
       this.prisma.mandal.count({ where: { status: AccountStatus.ACTIVE } }),
       this.prisma.member.count({ where: { status: AccountStatus.ACTIVE, user: { status: AccountStatus.ACTIVE } } }),
       this.prisma.varganiSlip.count({ where: { mandal: { status: AccountStatus.ACTIVE }, status: SlipStatus.ACTIVE } }),
+      this.getUser(ctx.userId),
     ]);
 
     return {
@@ -194,24 +195,25 @@ export class WorkspaceService {
         totalMembers,
         totalSlips,
       },
-      user: await this.getUser(ctx.userId),
+      user,
     };
   }
 
   private async bootstrapMandal(ctx: AuthContext) {
     const mandalId = ctx.mandalId as string;
-    const mandal = await this.prisma.mandal.findUnique({
-      where: { id: mandalId },
-    });
+    const [mandal, initialActiveFestival] = await Promise.all([
+      this.prisma.mandal.findUnique({ where: { id: mandalId } }),
+      this.prisma.festival.findFirst({
+        orderBy: { startDate: 'desc' },
+        where: { mandalId, status: FestivalStatus.ACTIVE },
+      }),
+    ]);
 
     if (!mandal) {
       throw new NotFoundException('Mandal workspace not found.');
     }
 
-    let activeFestival = await this.prisma.festival.findFirst({
-      orderBy: { startDate: 'desc' },
-      where: { mandalId, status: FestivalStatus.ACTIVE },
-    });
+    let activeFestival = initialActiveFestival;
 
     if (!activeFestival) {
       const setup = await this.prisma.$transaction((tx) =>
@@ -260,6 +262,7 @@ export class WorkspaceService {
       memberTotal,
       users,
       auditEvents,
+      user,
     ] = await Promise.all([
       isCollectorWorkspace ? this.prisma.member.findFirst({
         include: { group: true },
@@ -384,6 +387,7 @@ export class WorkspaceService {
         take: 25,
         where: { mandalId },
       }),
+      this.getUser(ctx.userId),
     ]);
 
     const totalCollection = Number(activeSlipAmount._sum.amount ?? 0);
@@ -487,7 +491,7 @@ export class WorkspaceService {
         },
       },
       templates,
-      user: await this.getUser(ctx.userId),
+      user,
       users,
     };
   }
@@ -523,12 +527,19 @@ export class WorkspaceService {
       },
     });
 
-    for (const mandal of mandalsWithoutActiveFestival) {
-      await this.prisma.$transaction((tx) =>
-        ensureDefaultMandalWorkspace(tx, {
-          createdByUserId,
-          mandalId: mandal.id,
-        }),
+    // Bound concurrency to reduce owner-login latency without exhausting the
+    // database pool when several mandals need initial setup at once.
+    const batchSize = 4;
+    for (let index = 0; index < mandalsWithoutActiveFestival.length; index += batchSize) {
+      await Promise.all(
+        mandalsWithoutActiveFestival.slice(index, index + batchSize).map((mandal) =>
+          this.prisma.$transaction((tx) =>
+            ensureDefaultMandalWorkspace(tx, {
+              createdByUserId,
+              mandalId: mandal.id,
+            }),
+          ),
+        ),
       );
     }
   }

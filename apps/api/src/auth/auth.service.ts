@@ -15,6 +15,8 @@ interface SessionMetadata {
   userAgent?: string;
 }
 
+type LoginUser = Pick<User, 'id' | 'mandalId' | 'name' | 'passwordHash' | 'role' | 'status'>;
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -178,7 +180,7 @@ export class AuthService {
   }
 
   private async createSessionTokenPair(
-    user: User,
+    user: LoginUser,
     metadata: SessionMetadata,
     existingSessionId?: string,
   ) {
@@ -246,7 +248,7 @@ export class AuthService {
 
   private sessionResponse(
     session: { accessToken: string; refreshToken: string; sessionId: string },
-    user: User,
+    user: LoginUser,
   ) {
     return {
       accessToken: session.accessToken,
@@ -274,12 +276,20 @@ export class AuthService {
 
   private async findLoginUser(identifier: string) {
     const normalized = identifier.trim().toLowerCase();
+    const select = {
+      id: true,
+      mandalId: true,
+      name: true,
+      passwordHash: true,
+      role: true,
+      status: true,
+    } as const;
 
     // Both fields are unique database indexes. Avoiding an OR query gives the
     // planner one direct index lookup on this high-traffic endpoint.
     return normalized.includes('@')
-      ? this.prisma.user.findUnique({ where: { email: normalized } })
-      : this.prisma.user.findUnique({ where: { phone: identifier.trim() } });
+      ? this.prisma.user.findUnique({ select, where: { email: normalized } })
+      : this.prisma.user.findUnique({ select, where: { phone: identifier.trim() } });
   }
 
   private async revokeSession(sessionId: string): Promise<void> {

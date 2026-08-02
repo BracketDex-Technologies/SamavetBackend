@@ -10,17 +10,19 @@ type ResponseLike = {
 
 type VercelHandler = (request: RequestLike, response: ResponseLike) => Promise<void>;
 
-let cachedHandler: VercelHandler | undefined;
+let handlerPromise: Promise<VercelHandler> | undefined;
 
 async function getApiHandler(): Promise<VercelHandler> {
-  if (cachedHandler) {
-    return cachedHandler;
+  if (!handlerPromise) {
+    const apiHandlerPath = '../apps/api/api/index';
+    handlerPromise = import(apiHandlerPath)
+      .then((module) => (module as { default: VercelHandler }).default)
+      .catch((error: unknown) => {
+        handlerPromise = undefined;
+        throw error;
+      });
   }
-
-  const apiHandlerPath = '../apps/api/api/index';
-  const module = (await import(apiHandlerPath)) as { default: VercelHandler };
-  cachedHandler = module.default;
-  return cachedHandler;
+  return handlerPromise;
 }
 
 export default async function handler(request: RequestLike, response: ResponseLike): Promise<void> {
@@ -38,10 +40,9 @@ export default async function handler(request: RequestLike, response: ResponseLi
     const apiHandler = await getApiHandler();
     await apiHandler(request, response);
   } catch (error) {
-    console.error(error);
+    console.error({ error: error instanceof Error ? error.name : 'UnknownError', event: 'api_entrypoint_failed' });
     response.status(500).json({
       error: 'API_ENTRYPOINT_FAILED',
-      detail: error instanceof Error ? error.message : 'Unknown entrypoint error',
       message: 'Digital Mandal API entrypoint could not start.',
     });
   }

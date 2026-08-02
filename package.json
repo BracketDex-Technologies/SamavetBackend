@@ -6,6 +6,9 @@
   "packageManager": "pnpm@9.12.0",
   "pnpm": {
     "overrides": {
+      "brace-expansion@<2.0.0": "^1.1.17",
+      "brace-expansion@>=2.0.0 <3.0.0": "^2.1.3",
+      "exceljs>uuid": "^11.1.1",
       "js-yaml": "^5.2.2",
       "postcss": "^8.5.18",
       "sharp": "^0.35.0"
@@ -27,7 +30,9 @@
     "db:studio": "pnpm --filter @digital-mandal/database prisma:studio",
     "demo:seed:akhilnayak": "node --env-file=.env scripts/seed-akhilnayak-demo.cjs",
     "demo:verify:akhilnayak": "node --env-file=.env scripts/verify-akhilnayak-demo.cjs",
-    "db:verify:tables": "node scripts/verify-supabase-tables.cjs"
+    "db:verify:tables": "node scripts/verify-supabase-tables.cjs",
+    "load:test": "k6 run scripts/load-test.js",
+    "storage:migrate-receipts": "node --env-file=.env scripts/migrate-receipts-private.cjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

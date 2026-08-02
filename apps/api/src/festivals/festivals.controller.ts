@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { AuthUser } from '../auth/decorators/auth-user.decorator';
@@ -31,6 +31,16 @@ export class FestivalsController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER)
   list(@AuthUser() ctx: AuthContext, @Param('mandalId') mandalId: string) {
     return this.festivalsService.list(ctx, mandalId);
+  }
+
+  @Post('years/:year/activate')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR)
+  activateYear(
+    @AuthUser() ctx: AuthContext,
+    @Param('mandalId') mandalId: string,
+    @Param('year', ParseIntPipe) year: number,
+  ) {
+    return this.festivalsService.activateYear(ctx, mandalId, year);
   }
 
   @Patch(':festivalId/status')

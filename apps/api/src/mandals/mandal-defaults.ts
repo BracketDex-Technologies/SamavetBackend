@@ -52,19 +52,31 @@ export async function ensureDefaultMandalWorkspace(
   tx: Prisma.TransactionClient,
   input: {
     createdByUserId?: string | null;
+    festivalYear?: number;
     mandalId: string;
     templateBackgroundUrl?: string;
   },
 ) {
+  const selectedYearStart = input.festivalYear
+    ? new Date(Date.UTC(input.festivalYear, 0, 1))
+    : null;
+  const selectedNextYearStart = input.festivalYear
+    ? new Date(Date.UTC(input.festivalYear + 1, 0, 1))
+    : null;
   const existingActiveFestival = await tx.festival.findFirst({
     orderBy: { startDate: 'desc' },
-    where: { mandalId: input.mandalId, status: FestivalStatus.ACTIVE },
+    where: input.festivalYear && selectedYearStart && selectedNextYearStart
+      ? {
+          mandalId: input.mandalId,
+          startDate: { gte: selectedYearStart, lt: selectedNextYearStart },
+        }
+      : { mandalId: input.mandalId, status: FestivalStatus.ACTIVE },
   });
   const festival =
     existingActiveFestival ??
     (await tx.festival.create({
       data: {
-        ...nextGanpatiFestivalWindow(),
+        ...(input.festivalYear ? ganpatiFestivalWindow(input.festivalYear) : nextGanpatiFestivalWindow()),
         mandalId: input.mandalId,
         status: FestivalStatus.ACTIVE,
       },
@@ -168,6 +180,10 @@ export function nextGanpatiFestivalWindow() {
   const currentYear = now.getUTCFullYear();
   const year = now.getUTCMonth() > 8 ? currentYear + 1 : currentYear;
 
+  return ganpatiFestivalWindow(year);
+}
+
+export function ganpatiFestivalWindow(year: number) {
   return {
     endDate: new Date(Date.UTC(year, 8, 30)),
     name: `Ganpati Festival ${year}`,

@@ -9,12 +9,15 @@ const baseConfig = {
 describe('validateAppConfig', () => {
   it('uses safe development defaults', () => {
     const config = validateAppConfig({ ...baseConfig, NODE_ENV: 'development' });
+    expect(config.AUTH_COOKIE_SECURE).toBe(false);
+    expect(config.AUTH_STRICT_SESSION_CHECK).toBe(true);
     expect(config.CORS_ORIGINS).toContain('http://localhost:5173');
     expect(config.SWAGGER_ENABLED).toBe(true);
   });
 
   it('falls back to the public web origin in production', () => {
     const config = validateAppConfig({ ...baseConfig, NODE_ENV: 'production' });
+    expect(config.AUTH_COOKIE_SECURE).toBe(true);
     expect(config.CORS_ORIGINS).toEqual(['https://epawati.samavet.in']);
   });
 

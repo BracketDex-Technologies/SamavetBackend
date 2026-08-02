@@ -1,14 +1,20 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
-  "installCommand": "pnpm install --frozen-lockfile=false --prod=false",
+  "installCommand": "pnpm install --frozen-lockfile --prod=false",
   "buildCommand": "pnpm --filter @digital-mandal/api build",
   "functions": {
     "api/index.ts": {
       "includeFiles": "apps/api/dist/**",
-      "maxDuration": 30,
-      "memory": 1024
+      "maxDuration": 60
     }
   },
+  "crons": [
+    {
+      "path": "/api/v1/internal/jobs/drain",
+      "schedule": "* * * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/(.*)",

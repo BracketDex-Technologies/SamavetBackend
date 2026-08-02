@@ -1,14 +1,15 @@
-import { Body, Controller, Get, Header, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { UserRole } from '@prisma/client';
 import { AuthContext } from '../auth/auth-context';
 import { AuthUser } from '../auth/decorators/auth-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { CancelSlipDto } from './dto/cancel-slip.dto';
 import { CreateVarganiSlipDto } from './dto/create-vargani-slip.dto';
+import { ListVarganiSlipsQueryDto } from './dto/list-vargani-slips-query.dto';
 import { ShareSlipDto } from './dto/share-slip.dto';
 import { UpdateVarganiSlipDto } from './dto/update-vargani-slip.dto';
 import { UploadSlipReceiptImageDto } from './dto/upload-slip-receipt-image.dto';
@@ -35,7 +36,7 @@ export class VarganiController {
 
   @Get('slips')
   @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER, UserRole.MEMBER)
-  listSlips(@AuthUser() ctx: AuthContext, @Query() query: PaginationQueryDto) {
+  listSlips(@AuthUser() ctx: AuthContext, @Query() query: ListVarganiSlipsQueryDto) {
     return this.varganiService.listSlips(ctx, query);
   }
 
@@ -62,6 +63,17 @@ export class VarganiController {
   @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER, UserRole.MEMBER)
   uploadReceiptImage(@AuthUser() ctx: AuthContext, @Param('id') id: string, @Body() dto: UploadSlipReceiptImageDto) {
     return this.varganiService.uploadReceiptImage(ctx, id, dto);
+  }
+
+  @Post('slips/:id/receipt-image-file')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 6 * 1024 * 1024, files: 1 } }))
+  @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER, UserRole.MEMBER)
+  uploadReceiptImageFile(
+    @AuthUser() ctx: AuthContext,
+    @Param('id') id: string,
+    @UploadedFile() file?: { buffer: Buffer; mimetype: string; originalname: string },
+  ) {
+    return this.varganiService.uploadReceiptImageFile(ctx, id, file);
   }
 
   @Patch('slips/:id')

@@ -39,6 +39,16 @@ const appConfigSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(32),
   JWT_ACCESS_TTL: z.string().default('15m'),
   JWT_REFRESH_TTL: z.string().default('30d'),
+  AUTH_COOKIE_NAME: z.string().min(1).default('digital_vargani_refresh'),
+  AUTH_COOKIE_SAME_SITE: z.enum(['lax', 'none', 'strict']).default('lax'),
+  AUTH_COOKIE_SECURE: envBoolean.optional(),
+  AUTH_REFRESH_COOKIE_MAX_AGE_MS: z.coerce.number().int().min(60_000).default(30 * 24 * 60 * 60 * 1000),
+  AUTH_STRICT_SESSION_CHECK: envBoolean.default(true),
+  CRON_SECRET: z
+    .string()
+    .refine((value) => value.length === 0 || value.length >= 32, 'Must be empty or contain at least 32 characters')
+    .default(''),
+  JOB_DRAIN_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(10),
   REDIS_URL: z.string().default('redis://localhost:6379'),
   S3_ENDPOINT: z.string().optional().default(''),
   S3_REGION: z.string().default('auto'),
@@ -49,6 +59,8 @@ const appConfigSchema = z.object({
   SUPABASE_URL: z.string().optional().default(''),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional().default(''),
   SUPABASE_STORAGE_BUCKET: z.string().min(1).default('digital-vargani'),
+  SUPABASE_RECEIPT_BUCKET: z.string().min(1).default('digital-vargani-receipts'),
+  STORAGE_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3_600),
   AUTHKEY_API_KEY: z.string().optional().default(''),
   AUTHKEY_WHATSAPP_WID: z.string().optional().default(''),
   AUTHKEY_WHATSAPP_RECEIPT_WID: z.string().optional().default(''),
@@ -57,11 +69,15 @@ const appConfigSchema = z.object({
   AUTHKEY_WHATSAPP_HEADER_MEDIA_URL: z.string().optional().default(''),
   AUTHKEY_WHATSAPP_HEADER_FILE_NAME: z.string().default('Vargani Receipt'),
   AUTHKEY_WHATSAPP_ENABLED: envBoolean.default(false),
+  AZURE_TRANSLATOR_ENDPOINT: z.string().url().default('https://api.cognitive.microsofttranslator.com'),
+  AZURE_TRANSLATOR_KEY: z.string().optional().default(''),
+  AZURE_TRANSLATOR_REGION: z.string().optional().default(''),
   CORS_ORIGINS: z.string().optional(),
 });
 
 type ParsedAppConfig = z.infer<typeof appConfigSchema>;
 export type AppConfig = Omit<ParsedAppConfig, 'CORS_ORIGINS' | 'SWAGGER_ENABLED'> & {
+  AUTH_COOKIE_SECURE: boolean;
   CORS_ORIGINS: string[];
   SWAGGER_ENABLED: boolean;
 };
@@ -96,6 +112,7 @@ export function validateAppConfig(config: Record<string, unknown>): AppConfig {
 
   return {
     ...parsed.data,
+    AUTH_COOKIE_SECURE: parsed.data.AUTH_COOKIE_SECURE ?? parsed.data.NODE_ENV === 'production',
     CORS_ORIGINS: corsOrigins,
     SWAGGER_ENABLED: parsed.data.SWAGGER_ENABLED ?? parsed.data.NODE_ENV !== 'production',
   };

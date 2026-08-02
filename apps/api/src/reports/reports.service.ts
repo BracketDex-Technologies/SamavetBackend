@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PaymentMode, SlipStatus } from '@prisma/client';
-import { Workbook } from 'exceljs';
+import { stream as ExcelStream } from 'exceljs';
+import { PassThrough } from 'node:stream';
 import { AuthContext } from '../auth/auth-context';
 import { assertSameMandal } from '../auth/tenant-scope';
 import { PrismaService } from '../prisma/prisma.service';
@@ -220,7 +221,7 @@ export class ReportsService {
     mandalId: string,
     festivalId: string,
     query: CollectionReportQueryDto,
-  ): Promise<Buffer> {
+  ): Promise<PassThrough> {
     assertSameMandal(ctx, mandalId);
 
     const createdAt =
@@ -231,28 +232,27 @@ export class ReportsService {
           }
         : undefined;
 
-    const [slips, mandal, festival] = await Promise.all([
-      this.prisma.varganiSlip.findMany({
-        include: {
-          collector: { select: { name: true, phone: true } },
-          group: { select: { name: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        where: {
-          areaName: query.areaName,
-          collectedByUserId: query.memberId,
-          createdAt,
-          festivalId,
-          groupId: query.groupId,
-          mandalId,
-          paymentMode: query.paymentMode,
-        },
-      }),
+    const where = {
+      areaName: query.areaName,
+      collectedByUserId: query.memberId,
+      createdAt,
+      festivalId,
+      groupId: query.groupId,
+      mandalId,
+      paymentMode: query.paymentMode,
+    };
+    const [slipCount, mandal, festival] = await Promise.all([
+      this.prisma.varganiSlip.count({ where }),
       this.prisma.mandal.findUnique({ select: { name: true }, where: { id: mandalId } }),
       this.prisma.festival.findUnique({ select: { name: true }, where: { id: festivalId } }),
     ]);
 
-    const workbook = new Workbook();
+    const output = new PassThrough();
+    const workbook = new ExcelStream.xlsx.WorkbookWriter({
+      stream: output,
+      useSharedStrings: false,
+      useStyles: true,
+    });
     workbook.creator = 'Digital Vargani';
     workbook.created = new Date();
 
@@ -271,7 +271,7 @@ export class ReportsService {
 
     sheet.mergeCells('A2:N2');
     const summary = sheet.getCell('A2');
-    summary.value = `Generated ${new Date().toLocaleString('en-IN')} | Total entries: ${slips.length}`;
+    summary.value = `Generated ${new Date().toLocaleString('en-IN')} | Total entries: ${slipCount}`;
     summary.font = { color: { argb: 'FF6F7280' }, italic: true, size: 10 };
     summary.alignment = { vertical: 'middle' };
 
@@ -300,37 +300,6 @@ export class ReportsService {
       cell.fill = { fgColor: { argb: 'FF21150F' }, pattern: 'solid', type: 'pattern' };
     });
 
-    for (const slip of slips) {
-      const row = sheet.addRow([
-        slip.slipNumber,
-        slip.createdAt,
-        slip.contributorName,
-        slip.shopName ?? '',
-        slip.contributorPhone ?? '',
-        slip.contributorAddress ?? '',
-        slip.areaName ?? '',
-        slip.group?.name ?? '',
-        slip.collector.name,
-        slip.collector.phone ?? '',
-        slip.paymentMode.replaceAll('_', ' '),
-        formatSlipStatus(slip.status),
-        Number(slip.amount),
-        formatCustomData(slip.customData),
-      ]);
-      row.getCell(2).numFmt = 'dd-mmm-yyyy hh:mm';
-      row.getCell(13).numFmt = '₹#,##0.00';
-      row.getCell(13).alignment = { horizontal: 'right' };
-      row.getCell(14).alignment = { wrapText: true, vertical: 'top' };
-
-      const statusCell = row.getCell(12);
-      const statusColor = slip.status === SlipStatus.ACTIVE
-        ? 'FFE8F7ED'
-        : slip.status === SlipStatus.PENDING
-          ? 'FFFFF4D6'
-          : 'FFFDE8E5';
-      statusCell.fill = { fgColor: { argb: statusColor }, pattern: 'solid', type: 'pattern' };
-    }
-
     sheet.autoFilter = { from: 'A4', to: 'N4' };
     const widths = [18, 21, 25, 22, 16, 30, 18, 20, 22, 18, 18, 14, 16, 35];
     widths.forEach((width, index) => {
@@ -339,8 +308,60 @@ export class ReportsService {
     sheet.getColumn(5).numFmt = '@';
     sheet.getColumn(10).numFmt = '@';
 
-    const buffer = await workbook.xlsx.writeBuffer();
-    return Buffer.from(buffer);
+    void (async () => {
+      let cursorId: string | undefined;
+      do {
+        const slips = await this.prisma.varganiSlip.findMany({
+          cursor: cursorId ? { id: cursorId } : undefined,
+          include: {
+            collector: { select: { name: true, phone: true } },
+            group: { select: { name: true } },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          skip: cursorId ? 1 : 0,
+          take: 500,
+          where,
+        });
+
+        for (const slip of slips) {
+          const row = sheet.addRow([
+            slip.slipNumber,
+            slip.createdAt,
+            slip.contributorName,
+            slip.shopName ?? '',
+            slip.contributorPhone ?? '',
+            slip.contributorAddress ?? '',
+            slip.areaName ?? '',
+            slip.group?.name ?? '',
+            slip.collector.name,
+            slip.collector.phone ?? '',
+            slip.paymentMode.replaceAll('_', ' '),
+            formatSlipStatus(slip.status),
+            Number(slip.amount),
+            formatCustomData(slip.customData),
+          ]);
+          row.getCell(2).numFmt = 'dd-mmm-yyyy hh:mm';
+          row.getCell(13).numFmt = '₹#,##0.00';
+          row.getCell(13).alignment = { horizontal: 'right' };
+          row.getCell(14).alignment = { wrapText: true, vertical: 'top' };
+          const statusCell = row.getCell(12);
+          const statusColor = slip.status === SlipStatus.ACTIVE
+            ? 'FFE8F7ED'
+            : slip.status === SlipStatus.PENDING
+              ? 'FFFFF4D6'
+              : 'FFFDE8E5';
+          statusCell.fill = { fgColor: { argb: statusColor }, pattern: 'solid', type: 'pattern' };
+          row.commit();
+        }
+
+        cursorId = slips.length === 500 ? slips.at(-1)?.id : undefined;
+      } while (cursorId);
+
+      sheet.commit();
+      await workbook.commit();
+    })().catch((error: unknown) => output.destroy(error instanceof Error ? error : new Error(String(error))));
+
+    return output;
   }
 }
 

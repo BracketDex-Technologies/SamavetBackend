@@ -1,9 +1,16 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { AccountStatus, Prisma, UserRole } from '@prisma/client';
 import argon2 from 'argon2';
 import { slugify } from '../common/utils/slugify';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { WhatsAppReceiptService } from '../vargani/whatsapp-receipt.service';
 import { CreateMandalDto } from './dto/create-mandal.dto';
 import { CreateMandalUserDto } from './dto/create-mandal-user.dto';
 import { ListMandalsQueryDto } from './dto/list-mandals-query.dto';
@@ -37,7 +44,18 @@ export class MandalsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
+    private readonly whatsAppReceiptService: WhatsAppReceiptService,
   ) {}
+
+  async listWhatsAppTemplates(forceRefresh = false) {
+    try {
+      return await this.whatsAppReceiptService.listTemplates(forceRefresh);
+    } catch (error) {
+      throw new ServiceUnavailableException(
+        error instanceof Error ? error.message : 'Could not load Authkey WhatsApp templates.',
+      );
+    }
+  }
 
   async create(dto: CreateMandalDto) {
     const slug = dto.slug ?? slugify(dto.name);
@@ -360,6 +378,48 @@ export class MandalsService {
         })
       : null;
 
+    let whatsappTemplateUpdate: {
+      whatsappTemplateLanguage: string | null;
+      whatsappTemplateName: string | null;
+      whatsappTemplateVariableCount: number | null;
+      whatsappTemplateWid: string | null;
+    } | undefined;
+
+    if (dto.whatsappTemplateWid !== undefined) {
+      const requestedWid = dto.whatsappTemplateWid?.trim() || null;
+      if (!requestedWid) {
+        whatsappTemplateUpdate = {
+          whatsappTemplateLanguage: null,
+          whatsappTemplateName: null,
+          whatsappTemplateVariableCount: null,
+          whatsappTemplateWid: null,
+        };
+      } else {
+        let catalog;
+        try {
+          catalog = await this.whatsAppReceiptService.listTemplates();
+        } catch (error) {
+          throw new ServiceUnavailableException(
+            error instanceof Error ? error.message : 'Could not validate the Authkey template.',
+          );
+        }
+
+        const template = catalog.items.find((item) => item.wid === requestedWid);
+        if (!template) throw new BadRequestException('The selected Authkey WhatsApp template was not found.');
+        if (!template.approved) throw new BadRequestException('Only approved Authkey WhatsApp templates can be assigned.');
+        if (!template.compatible) {
+          throw new BadRequestException('The selected template uses unsupported WhatsApp body variables.');
+        }
+
+        whatsappTemplateUpdate = {
+          whatsappTemplateLanguage: template.language,
+          whatsappTemplateName: template.name,
+          whatsappTemplateVariableCount: template.variableCount,
+          whatsappTemplateWid: template.wid,
+        };
+      }
+    }
+
     const updated = await this.prisma.mandal.update({
       data: {
         address: dto.address,
@@ -374,6 +434,7 @@ export class MandalsService {
         slipLimit: dto.slipLimit,
         state: dto.state,
         whatsappMode: dto.whatsappMode,
+        ...whatsappTemplateUpdate,
       },
       where: { id },
     });

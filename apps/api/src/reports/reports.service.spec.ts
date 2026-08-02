@@ -63,8 +63,10 @@ describe('ReportsService', () => {
       festival: { findUnique: jest.fn().mockResolvedValue({ name: 'Ganeshotsav 2026' }) },
       mandal: { findUnique: jest.fn().mockResolvedValue({ name: 'Ganesh Mitra Mandal' }) },
       varganiSlip: {
+        count: jest.fn().mockResolvedValue(1),
         findMany: jest.fn().mockResolvedValue([
           {
+            id: 'slip-1',
             amount: 1251,
             areaName: 'Pune',
             collector: { name: 'Sagar Jadhav', phone: '+919999999999' },
@@ -84,7 +86,10 @@ describe('ReportsService', () => {
     };
     const service = new ReportsService(prisma as never);
 
-    const file = await service.exportAllVarganiEntriesXlsx(mandalScopedCtx, 'mandal-1', 'festival-1', {});
+    const fileStream = await service.exportAllVarganiEntriesXlsx(mandalScopedCtx, 'mandal-1', 'festival-1', {});
+    const chunks: Buffer[] = [];
+    for await (const chunk of fileStream) chunks.push(Buffer.from(chunk));
+    const file = Buffer.concat(chunks);
     const workbook = new Workbook();
     const workbookBytes = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength) as ArrayBuffer;
     await workbook.xlsx.load(workbookBytes);

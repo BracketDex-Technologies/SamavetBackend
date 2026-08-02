@@ -1,0 +1,21 @@
+name: Keep backend warm
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    name: Ping backend liveness
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Call backend health endpoint
+        env:
+          HEALTH_URL: https://samavetbackend.onrender.com/api/v1/health/live
+        run: |
+          curl --fail --silent --show-error --max-time 20 "$HEALTH_URL"

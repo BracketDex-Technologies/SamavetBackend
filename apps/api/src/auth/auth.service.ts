@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { AccountStatus, User } from '@prisma/client';
@@ -15,8 +15,12 @@ interface SessionMetadata {
   userAgent?: string;
 }
 
+type LoginUser = Pick<User, 'id' | 'mandalId' | 'name' | 'passwordHash' | 'role' | 'status'>;
+
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly jwt: JwtService,
@@ -24,25 +28,40 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto, metadata: SessionMetadata) {
+    const startedAt = Date.now();
     const user = await this.findLoginUser(dto.identifier);
 
     if (!user || user.status !== AccountStatus.ACTIVE) {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
+    const passwordStartedAt = Date.now();
     const passwordMatches = await argon2.verify(user.passwordHash, dto.password);
+    const passwordDurationMs = Date.now() - passwordStartedAt;
 
     if (!passwordMatches) {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
-    // Serverless runtimes may stop executing as soon as the response is sent.
-    // Keep this audit-relevant write inside the request lifetime.
-    const [session] = await Promise.all([
-      this.createSessionTokenPair(user, metadata),
-      this.prisma.user.update({ data: { lastLoginAt: new Date() }, where: { id: user.id } }),
-    ]);
-    return session;
+    const session = await this.createSessionTokenPair(user, metadata);
+    this.recordLoginSideEffects(user.id, session.sessionId).catch((error: unknown) => {
+      this.logger.warn(JSON.stringify({
+        detail: error instanceof Error ? error.message : 'Unknown login side-effect error',
+        scope: 'auth.login.side_effects',
+        userId: user.id,
+      }));
+    });
+    const durationMs = Date.now() - startedAt;
+    if (durationMs >= 2_000) {
+      this.logger.warn(JSON.stringify({
+        durationMs,
+        passwordDurationMs,
+        role: user.role,
+        scope: 'auth.login',
+        userId: user.id,
+      }));
+    }
+    return this.sessionResponse(session, user);
   }
 
   async refresh(refreshToken: string, metadata: SessionMetadata) {
@@ -68,7 +87,8 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token.');
     }
 
-    return this.createSessionTokenPair(session.user, metadata, session.id);
+    const nextSession = await this.createSessionTokenPair(session.user, metadata, session.id);
+    return this.sessionResponse(nextSession, session.user);
   }
 
   async logout(ctx: AuthContext): Promise<void> {
@@ -159,7 +179,11 @@ export class AuthService {
     };
   }
 
-  private async createSessionTokenPair(user: User, metadata: SessionMetadata, existingSessionId?: string) {
+  private async createSessionTokenPair(
+    user: LoginUser,
+    metadata: SessionMetadata,
+    existingSessionId?: string,
+  ) {
     const sessionId = existingSessionId ?? randomUUID();
     const payload: JwtPayload = {
       mandalId: user.mandalId,
@@ -203,32 +227,32 @@ export class AuthService {
         where: { id: existingSessionId },
       });
     } else {
-      await this.prisma.$transaction([
-        this.prisma.userSession.create({
-          data: {
-            expiresAt: refreshExpiresAt,
-            id: sessionId,
-            ipAddress: metadata.ipAddress,
-            refreshTokenHash,
-            userAgent: metadata.userAgent,
-            userId: user.id,
-          },
-        }),
-        // The (userId, expiresAt) index makes this a bounded per-user cleanup
-        // instead of allowing expired sessions to accumulate indefinitely.
-        this.prisma.userSession.deleteMany({
-          where: {
-            expiresAt: { lte: new Date() },
-            id: { not: sessionId },
-            userId: user.id,
-          },
-        }),
-      ]);
+      await this.prisma.userSession.create({
+        data: {
+          expiresAt: refreshExpiresAt,
+          id: sessionId,
+          ipAddress: metadata.ipAddress,
+          refreshTokenHash,
+          userAgent: metadata.userAgent,
+          userId: user.id,
+        },
+      });
     }
 
     return {
       accessToken,
       refreshToken,
+      sessionId,
+    };
+  }
+
+  private sessionResponse(
+    session: { accessToken: string; refreshToken: string; sessionId: string },
+    user: LoginUser,
+  ) {
+    return {
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
       user: {
         id: user.id,
         mandalId: user.mandalId,
@@ -238,14 +262,34 @@ export class AuthService {
     };
   }
 
+  private async recordLoginSideEffects(userId: string, activeSessionId: string) {
+    const loginTime = new Date();
+    await this.prisma.user.update({ data: { lastLoginAt: loginTime }, where: { id: userId } });
+    await this.prisma.userSession.deleteMany({
+      where: {
+        expiresAt: { lte: loginTime },
+        id: { not: activeSessionId },
+        userId,
+      },
+    });
+  }
+
   private async findLoginUser(identifier: string) {
     const normalized = identifier.trim().toLowerCase();
+    const select = {
+      id: true,
+      mandalId: true,
+      name: true,
+      passwordHash: true,
+      role: true,
+      status: true,
+    } as const;
 
     // Both fields are unique database indexes. Avoiding an OR query gives the
     // planner one direct index lookup on this high-traffic endpoint.
     return normalized.includes('@')
-      ? this.prisma.user.findUnique({ where: { email: normalized } })
-      : this.prisma.user.findUnique({ where: { phone: identifier.trim() } });
+      ? this.prisma.user.findUnique({ select, where: { email: normalized } })
+      : this.prisma.user.findUnique({ select, where: { phone: identifier.trim() } });
   }
 
   private async revokeSession(sessionId: string): Promise<void> {

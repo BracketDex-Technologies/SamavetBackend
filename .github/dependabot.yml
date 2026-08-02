@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Major upgrades such as Prisma 6 -> 7, Next 15 -> 16, or TypeScript 5 -> 7
+      # can require code/config migrations. Keep Dependabot automatic updates to
+      # safe patch/minor bumps and handle majors intentionally.
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     groups:
       production-dependencies:
         dependency-type: production

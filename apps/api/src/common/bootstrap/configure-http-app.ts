@@ -30,8 +30,15 @@ export function configureHttpApp(app: INestApplication) {
     const suppliedId = request.header('x-request-id');
     const requestId = suppliedId && /^[a-zA-Z0-9._-]{1,100}$/.test(suppliedId) ? suppliedId : randomUUID();
     const startedAt = Date.now();
+    const writeHead = response.writeHead.bind(response);
     response.setHeader('x-request-id', requestId);
     response.setHeader('cache-control', 'no-store');
+    response.writeHead = ((...args: Parameters<Response['writeHead']>) => {
+      if (!response.headersSent) {
+        response.setHeader('x-response-time-ms', String(Date.now() - startedAt));
+      }
+      return writeHead(...args);
+    }) as Response['writeHead'];
     response.on('finish', () => {
       const durationMs = Date.now() - startedAt;
       if (response.statusCode >= 500 || durationMs >= 2_000) {

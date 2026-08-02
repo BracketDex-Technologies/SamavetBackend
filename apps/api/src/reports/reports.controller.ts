@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, Param, Query, StreamableFile, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { AuthContext } from '../auth/auth-context';
@@ -38,5 +38,19 @@ export class ReportsController {
     @Query() query: CollectionReportQueryDto,
   ) {
     return this.reportsService.exportCollectionReportCsv(ctx, mandalId, festivalId, query);
+  }
+
+  @Get('collections.xlsx')
+  @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  @Header('Content-Disposition', 'attachment; filename="digital-vargani-entries.xlsx"')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER)
+  async exportAllVarganiEntriesXlsx(
+    @AuthUser() ctx: AuthContext,
+    @Param('mandalId') mandalId: string,
+    @Param('festivalId') festivalId: string,
+    @Query() query: CollectionReportQueryDto,
+  ) {
+    const file = await this.reportsService.exportAllVarganiEntriesXlsx(ctx, mandalId, festivalId, query);
+    return new StreamableFile(file);
   }
 }

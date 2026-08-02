@@ -1,7 +1,7 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { AccountStatus, User } from '@prisma/client';
+import { AccountStatus, Prisma, User } from '@prisma/client';
 import argon2 from 'argon2';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
@@ -17,6 +17,8 @@ interface SessionMetadata {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly jwt: JwtService,
@@ -24,24 +26,32 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto, metadata: SessionMetadata) {
+    const startedAt = Date.now();
     const user = await this.findLoginUser(dto.identifier);
 
     if (!user || user.status !== AccountStatus.ACTIVE) {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
+    const passwordStartedAt = Date.now();
     const passwordMatches = await argon2.verify(user.passwordHash, dto.password);
+    const passwordDurationMs = Date.now() - passwordStartedAt;
 
     if (!passwordMatches) {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
-    // Serverless runtimes may stop executing as soon as the response is sent.
-    // Keep this audit-relevant write inside the request lifetime.
-    const [session] = await Promise.all([
-      this.createSessionTokenPair(user, metadata),
-      this.prisma.user.update({ data: { lastLoginAt: new Date() }, where: { id: user.id } }),
-    ]);
+    const session = await this.createSessionTokenPair(user, metadata, undefined, true);
+    const durationMs = Date.now() - startedAt;
+    if (durationMs >= 2_000) {
+      this.logger.warn(JSON.stringify({
+        durationMs,
+        passwordDurationMs,
+        role: user.role,
+        scope: 'auth.login',
+        userId: user.id,
+      }));
+    }
     return session;
   }
 
@@ -159,7 +169,12 @@ export class AuthService {
     };
   }
 
-  private async createSessionTokenPair(user: User, metadata: SessionMetadata, existingSessionId?: string) {
+  private async createSessionTokenPair(
+    user: User,
+    metadata: SessionMetadata,
+    existingSessionId?: string,
+    markLogin = false,
+  ) {
     const sessionId = existingSessionId ?? randomUUID();
     const payload: JwtPayload = {
       mandalId: user.mandalId,
@@ -191,19 +206,26 @@ export class AuthService {
     // login/refresh. Passwords continue to use Argon2.
     const refreshTokenHash = hashRefreshToken(refreshToken);
 
+    const loginTime = new Date();
     if (existingSessionId) {
-      await this.prisma.userSession.update({
-        data: {
-          expiresAt: refreshExpiresAt,
-          ipAddress: metadata.ipAddress,
-          refreshTokenHash,
-          revokedAt: null,
-          userAgent: metadata.userAgent,
-        },
-        where: { id: existingSessionId },
-      });
+      const writes: Prisma.PrismaPromise<unknown>[] = [
+        this.prisma.userSession.update({
+          data: {
+            expiresAt: refreshExpiresAt,
+            ipAddress: metadata.ipAddress,
+            refreshTokenHash,
+            revokedAt: null,
+            userAgent: metadata.userAgent,
+          },
+          where: { id: existingSessionId },
+        }),
+      ];
+      if (markLogin) {
+        writes.push(this.prisma.user.update({ data: { lastLoginAt: loginTime }, where: { id: user.id } }));
+      }
+      await this.prisma.$transaction(writes);
     } else {
-      await this.prisma.$transaction([
+      const writes: Prisma.PrismaPromise<unknown>[] = [
         this.prisma.userSession.create({
           data: {
             expiresAt: refreshExpiresAt,
@@ -218,12 +240,16 @@ export class AuthService {
         // instead of allowing expired sessions to accumulate indefinitely.
         this.prisma.userSession.deleteMany({
           where: {
-            expiresAt: { lte: new Date() },
+            expiresAt: { lte: loginTime },
             id: { not: sessionId },
             userId: user.id,
           },
         }),
-      ]);
+      ];
+      if (markLogin) {
+        writes.push(this.prisma.user.update({ data: { lastLoginAt: loginTime }, where: { id: user.id } }));
+      }
+      await this.prisma.$transaction(writes);
     }
 
     return {

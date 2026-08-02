@@ -199,15 +199,22 @@ function parseDataUrl(dataUrl: string) {
 }
 
 function safeFileName(value: string) {
-  return value
+  const normalized = value
     .trim()
-    .replace(/[^a-z0-9._-]+/giu, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 120) || 'asset.png';
+    .replace(/[^a-z0-9._-]+/giu, '-');
+  return trimEdgeCharacter(normalized, '-').slice(0, 120) || 'asset.png';
 }
 
 function trimSlashes(value: string) {
-  return value.replace(/^\/+|\/+$/g, '');
+  return trimEdgeCharacter(value, '/');
+}
+
+function trimEdgeCharacter(value: string, character: string) {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === character) start += 1;
+  while (end > start && value[end - 1] === character) end -= 1;
+  return value.slice(start, end);
 }
 
 function extensionForContentType(contentType: string) {

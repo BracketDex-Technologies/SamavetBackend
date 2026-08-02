@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PaymentMode, SlipStatus } from '@prisma/client';
+import { Workbook } from 'exceljs';
 import { AuthContext } from '../auth/auth-context';
 import { assertSameMandal } from '../auth/tenant-scope';
 import { PrismaService } from '../prisma/prisma.service';
@@ -213,6 +214,147 @@ export class ReportsService {
       ...rows,
     ]);
   }
+
+  async exportAllVarganiEntriesXlsx(
+    ctx: AuthContext,
+    mandalId: string,
+    festivalId: string,
+    query: CollectionReportQueryDto,
+  ): Promise<Buffer> {
+    assertSameMandal(ctx, mandalId);
+
+    const createdAt =
+      query.dateFrom || query.dateTo
+        ? {
+            gte: query.dateFrom ? new Date(query.dateFrom) : undefined,
+            lte: query.dateTo ? new Date(query.dateTo) : undefined,
+          }
+        : undefined;
+
+    const [slips, mandal, festival] = await Promise.all([
+      this.prisma.varganiSlip.findMany({
+        include: {
+          collector: { select: { name: true, phone: true } },
+          group: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        where: {
+          areaName: query.areaName,
+          collectedByUserId: query.memberId,
+          createdAt,
+          festivalId,
+          groupId: query.groupId,
+          mandalId,
+          paymentMode: query.paymentMode,
+        },
+      }),
+      this.prisma.mandal.findUnique({ select: { name: true }, where: { id: mandalId } }),
+      this.prisma.festival.findUnique({ select: { name: true }, where: { id: festivalId } }),
+    ]);
+
+    const workbook = new Workbook();
+    workbook.creator = 'Digital Vargani';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Vargani Entries', {
+      pageSetup: { fitToPage: true, fitToWidth: 1, orientation: 'landscape' },
+      properties: { defaultRowHeight: 20 },
+      views: [{ activeCell: 'A5', state: 'frozen', ySplit: 4 }],
+    });
+    sheet.mergeCells('A1:N1');
+    const title = sheet.getCell('A1');
+    title.value = `${mandal?.name ?? 'Mandal'} - ${festival?.name ?? 'Festival'} Vargani Entries`;
+    title.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 16 };
+    title.alignment = { horizontal: 'left', vertical: 'middle' };
+    title.fill = { fgColor: { argb: 'FFA54C20' }, pattern: 'solid', type: 'pattern' };
+    sheet.getRow(1).height = 30;
+
+    sheet.mergeCells('A2:N2');
+    const summary = sheet.getCell('A2');
+    summary.value = `Generated ${new Date().toLocaleString('en-IN')} | Total entries: ${slips.length}`;
+    summary.font = { color: { argb: 'FF6F7280' }, italic: true, size: 10 };
+    summary.alignment = { vertical: 'middle' };
+
+    const headers = [
+      'Slip Number',
+      'Date & Time',
+      'Contributor Name',
+      'Shop Name',
+      'Phone',
+      'Address',
+      'Area',
+      'Group',
+      'Collected By',
+      'Collector Phone',
+      'Payment Mode',
+      'Status',
+      'Amount',
+      'Custom Details',
+    ];
+    const headerRow = sheet.getRow(4);
+    headerRow.values = headers;
+    headerRow.height = 25;
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+      cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      cell.fill = { fgColor: { argb: 'FF21150F' }, pattern: 'solid', type: 'pattern' };
+    });
+
+    for (const slip of slips) {
+      const row = sheet.addRow([
+        slip.slipNumber,
+        slip.createdAt,
+        slip.contributorName,
+        slip.shopName ?? '',
+        slip.contributorPhone ?? '',
+        slip.contributorAddress ?? '',
+        slip.areaName ?? '',
+        slip.group?.name ?? '',
+        slip.collector.name,
+        slip.collector.phone ?? '',
+        slip.paymentMode.replaceAll('_', ' '),
+        formatSlipStatus(slip.status),
+        Number(slip.amount),
+        formatCustomData(slip.customData),
+      ]);
+      row.getCell(2).numFmt = 'dd-mmm-yyyy hh:mm';
+      row.getCell(13).numFmt = '₹#,##0.00';
+      row.getCell(13).alignment = { horizontal: 'right' };
+      row.getCell(14).alignment = { wrapText: true, vertical: 'top' };
+
+      const statusCell = row.getCell(12);
+      const statusColor = slip.status === SlipStatus.ACTIVE
+        ? 'FFE8F7ED'
+        : slip.status === SlipStatus.PENDING
+          ? 'FFFFF4D6'
+          : 'FFFDE8E5';
+      statusCell.fill = { fgColor: { argb: statusColor }, pattern: 'solid', type: 'pattern' };
+    }
+
+    sheet.autoFilter = { from: 'A4', to: 'N4' };
+    const widths = [18, 21, 25, 22, 16, 30, 18, 20, 22, 18, 18, 14, 16, 35];
+    widths.forEach((width, index) => {
+      sheet.getColumn(index + 1).width = width;
+    });
+    sheet.getColumn(5).numFmt = '@';
+    sheet.getColumn(10).numFmt = '@';
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
+  }
+}
+
+function formatSlipStatus(status: SlipStatus): string {
+  if (status === SlipStatus.ACTIVE) return 'Paid';
+  return status.charAt(0) + status.slice(1).toLowerCase();
+}
+
+function formatCustomData(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  return Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== null && item !== undefined && item !== '')
+    .map(([key, item]) => `${key}: ${String(item)}`)
+    .join(' | ');
 }
 
 export function toCsv(rows: Array<Array<string | number>>): string {

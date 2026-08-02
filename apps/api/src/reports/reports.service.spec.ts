@@ -1,5 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
-import { PaymentMode, UserRole } from '@prisma/client';
+import { PaymentMode, SlipStatus, UserRole } from '@prisma/client';
+import { Workbook } from 'exceljs';
 import { ReportsService, toCsv } from './reports.service';
 
 const mandalScopedCtx = {
@@ -55,6 +56,50 @@ describe('ReportsService', () => {
     await expect(
       service.exportCollectionReportCsv(mandalScopedCtx, 'mandal-2', 'festival-1', {}),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('exports every Vargani status as a formatted Excel workbook', async () => {
+    const prisma = {
+      festival: { findUnique: jest.fn().mockResolvedValue({ name: 'Ganeshotsav 2026' }) },
+      mandal: { findUnique: jest.fn().mockResolvedValue({ name: 'Ganesh Mitra Mandal' }) },
+      varganiSlip: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            amount: 1251,
+            areaName: 'Pune',
+            collector: { name: 'Sagar Jadhav', phone: '+919999999999' },
+            contributorAddress: 'Main Road',
+            contributorName: 'Mahesh Traders',
+            contributorPhone: '+918888888888',
+            createdAt: new Date('2026-07-26T07:30:00.000Z'),
+            customData: { donorType: 'Shop' },
+            group: { name: 'Main Bazaar' },
+            paymentMode: PaymentMode.UPI,
+            shopName: 'Mahesh Traders',
+            slipNumber: '003',
+            status: SlipStatus.PENDING,
+          },
+        ]),
+      },
+    };
+    const service = new ReportsService(prisma as never);
+
+    const file = await service.exportAllVarganiEntriesXlsx(mandalScopedCtx, 'mandal-1', 'festival-1', {});
+    const workbook = new Workbook();
+    const workbookBytes = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength) as ArrayBuffer;
+    await workbook.xlsx.load(workbookBytes);
+    const sheet = workbook.getWorksheet('Vargani Entries');
+
+    expect(file.subarray(0, 2).toString()).toBe('PK');
+    expect(sheet?.getCell('A1').value).toContain('Ganesh Mitra Mandal');
+    expect(sheet?.getCell('A5').value).toBe('003');
+    expect(sheet?.getCell('L5').value).toBe('Pending');
+    expect(sheet?.getCell('M5').value).toBe(1251);
+    expect(prisma.varganiSlip.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.not.objectContaining({ status: expect.anything() }),
+      }),
+    );
   });
 });
 

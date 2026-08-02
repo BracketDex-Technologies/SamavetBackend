@@ -1,7 +1,7 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { AccountStatus, Prisma, User } from '@prisma/client';
+import { AccountStatus, User } from '@prisma/client';
 import argon2 from 'argon2';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AppConfig } from '../config/app-config';
@@ -41,7 +41,14 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
-    const session = await this.createSessionTokenPair(user, metadata, undefined, true);
+    const session = await this.createSessionTokenPair(user, metadata);
+    this.recordLoginSideEffects(user.id, session.sessionId).catch((error: unknown) => {
+      this.logger.warn(JSON.stringify({
+        detail: error instanceof Error ? error.message : 'Unknown login side-effect error',
+        scope: 'auth.login.side_effects',
+        userId: user.id,
+      }));
+    });
     const durationMs = Date.now() - startedAt;
     if (durationMs >= 2_000) {
       this.logger.warn(JSON.stringify({
@@ -52,7 +59,7 @@ export class AuthService {
         userId: user.id,
       }));
     }
-    return session;
+    return this.sessionResponse(session, user);
   }
 
   async refresh(refreshToken: string, metadata: SessionMetadata) {
@@ -78,7 +85,8 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token.');
     }
 
-    return this.createSessionTokenPair(session.user, metadata, session.id);
+    const nextSession = await this.createSessionTokenPair(session.user, metadata, session.id);
+    return this.sessionResponse(nextSession, session.user);
   }
 
   async logout(ctx: AuthContext): Promise<void> {
@@ -173,7 +181,6 @@ export class AuthService {
     user: User,
     metadata: SessionMetadata,
     existingSessionId?: string,
-    markLogin = false,
   ) {
     const sessionId = existingSessionId ?? randomUUID();
     const payload: JwtPayload = {
@@ -206,55 +213,44 @@ export class AuthService {
     // login/refresh. Passwords continue to use Argon2.
     const refreshTokenHash = hashRefreshToken(refreshToken);
 
-    const loginTime = new Date();
     if (existingSessionId) {
-      const writes: Prisma.PrismaPromise<unknown>[] = [
-        this.prisma.userSession.update({
-          data: {
-            expiresAt: refreshExpiresAt,
-            ipAddress: metadata.ipAddress,
-            refreshTokenHash,
-            revokedAt: null,
-            userAgent: metadata.userAgent,
-          },
-          where: { id: existingSessionId },
-        }),
-      ];
-      if (markLogin) {
-        writes.push(this.prisma.user.update({ data: { lastLoginAt: loginTime }, where: { id: user.id } }));
-      }
-      await this.prisma.$transaction(writes);
+      await this.prisma.userSession.update({
+        data: {
+          expiresAt: refreshExpiresAt,
+          ipAddress: metadata.ipAddress,
+          refreshTokenHash,
+          revokedAt: null,
+          userAgent: metadata.userAgent,
+        },
+        where: { id: existingSessionId },
+      });
     } else {
-      const writes: Prisma.PrismaPromise<unknown>[] = [
-        this.prisma.userSession.create({
-          data: {
-            expiresAt: refreshExpiresAt,
-            id: sessionId,
-            ipAddress: metadata.ipAddress,
-            refreshTokenHash,
-            userAgent: metadata.userAgent,
-            userId: user.id,
-          },
-        }),
-        // The (userId, expiresAt) index makes this a bounded per-user cleanup
-        // instead of allowing expired sessions to accumulate indefinitely.
-        this.prisma.userSession.deleteMany({
-          where: {
-            expiresAt: { lte: loginTime },
-            id: { not: sessionId },
-            userId: user.id,
-          },
-        }),
-      ];
-      if (markLogin) {
-        writes.push(this.prisma.user.update({ data: { lastLoginAt: loginTime }, where: { id: user.id } }));
-      }
-      await this.prisma.$transaction(writes);
+      await this.prisma.userSession.create({
+        data: {
+          expiresAt: refreshExpiresAt,
+          id: sessionId,
+          ipAddress: metadata.ipAddress,
+          refreshTokenHash,
+          userAgent: metadata.userAgent,
+          userId: user.id,
+        },
+      });
     }
 
     return {
       accessToken,
       refreshToken,
+      sessionId,
+    };
+  }
+
+  private sessionResponse(
+    session: { accessToken: string; refreshToken: string; sessionId: string },
+    user: User,
+  ) {
+    return {
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
       user: {
         id: user.id,
         mandalId: user.mandalId,
@@ -262,6 +258,18 @@ export class AuthService {
         role: user.role,
       },
     };
+  }
+
+  private async recordLoginSideEffects(userId: string, activeSessionId: string) {
+    const loginTime = new Date();
+    await this.prisma.user.update({ data: { lastLoginAt: loginTime }, where: { id: userId } });
+    await this.prisma.userSession.deleteMany({
+      where: {
+        expiresAt: { lte: loginTime },
+        id: { not: activeSessionId },
+        userId,
+      },
+    });
   }
 
   private async findLoginUser(identifier: string) {

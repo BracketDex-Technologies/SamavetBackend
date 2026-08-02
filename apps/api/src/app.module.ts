@@ -18,6 +18,7 @@ import { ReportsModule } from './reports/reports.module';
 import { RootController } from './root.controller';
 import { TemplatesModule } from './templates/templates.module';
 import { TasksModule } from './tasks/tasks.module';
+import { TranslationModule } from './translation/translation.module';
 import { VarganiModule } from './vargani/vargani.module';
 import { WorkspaceModule } from './workspace/workspace.module';
 
@@ -45,6 +46,7 @@ import { WorkspaceModule } from './workspace/workspace.module';
     VarganiModule,
     ExpensesModule,
     TasksModule,
+    TranslationModule,
     JobsModule,
     TemplatesModule,
     ReportsModule,

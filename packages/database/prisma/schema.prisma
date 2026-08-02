@@ -101,6 +101,10 @@ model Mandal {
   contactPhone String?       @map("contact_phone")
   slipLimit    Int?          @map("slip_limit")
   whatsappMode String        @default("AUTO_API") @map("whatsapp_mode")
+  whatsappTemplateWid           String? @map("whatsapp_template_wid")
+  whatsappTemplateName          String? @map("whatsapp_template_name")
+  whatsappTemplateLanguage      String? @map("whatsapp_template_language")
+  whatsappTemplateVariableCount Int?    @map("whatsapp_template_variable_count")
   status       AccountStatus @default(ACTIVE)
   plan         String        @default("starter")
   createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -429,6 +433,7 @@ model FestivalTask {
 model BackgroundJob {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   mandalId     String?   @map("mandal_id") @db.Uuid
+  deduplicationKey String? @unique @map("deduplication_key")
   type         String
   status       String    @default("QUEUED")
   payload      Json      @default("{}")

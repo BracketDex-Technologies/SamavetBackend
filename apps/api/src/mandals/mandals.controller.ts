@@ -33,6 +33,13 @@ export class MandalsController {
     return this.mandalsService.list(query);
   }
 
+  @Get('whatsapp/templates')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOkResponse({ description: 'Authkey WhatsApp templates available for mandal assignment.' })
+  listWhatsAppTemplates(@Query('refresh') refresh?: string) {
+    return this.mandalsService.listWhatsAppTemplates(refresh === 'true');
+  }
+
   @Get(':id')
   @Roles(UserRole.SUPER_ADMIN)
   @ApiOkResponse({ description: 'Mandal details.' })

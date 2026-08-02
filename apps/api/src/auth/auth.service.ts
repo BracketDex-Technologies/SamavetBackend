@@ -36,13 +36,13 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials.');
     }
 
-    // Fire lastLoginAt update asynchronously without blocking response
-    void this.prisma.user.update({
-      data: { lastLoginAt: new Date() },
-      where: { id: user.id },
-    }).catch(() => undefined);
-
-    return this.createSessionTokenPair(user, metadata);
+    // Serverless runtimes may stop executing as soon as the response is sent.
+    // Keep this audit-relevant write inside the request lifetime.
+    const [session] = await Promise.all([
+      this.createSessionTokenPair(user, metadata),
+      this.prisma.user.update({ data: { lastLoginAt: new Date() }, where: { id: user.id } }),
+    ]);
+    return session;
   }
 
   async refresh(refreshToken: string, metadata: SessionMetadata) {
@@ -122,8 +122,9 @@ export class AuthService {
       throw new UnauthorizedException('Invalid access token.');
     }
 
-    // Fast return from JWT payload if session checking overhead is reduced
-    if (payload.sub && payload.sessionId) {
+    if (!payload.sub || !payload.sessionId) throw new UnauthorizedException('Session is no longer active.');
+
+    if (!this.config.get('AUTH_STRICT_SESSION_CHECK', { infer: true })) {
       return {
         mandalId: payload.mandalId ?? null,
         role: payload.role,
@@ -132,7 +133,30 @@ export class AuthService {
       };
     }
 
-    throw new UnauthorizedException('Session is no longer active.');
+    const session = await this.prisma.userSession.findFirst({
+      select: {
+        expiresAt: true,
+        revokedAt: true,
+        user: { select: { id: true, mandalId: true, role: true, status: true } },
+      },
+      where: { id: payload.sessionId, userId: payload.sub },
+    });
+
+    if (
+      !session ||
+      session.revokedAt ||
+      session.expiresAt <= new Date() ||
+      session.user.status !== AccountStatus.ACTIVE
+    ) {
+      throw new UnauthorizedException('Session is no longer active.');
+    }
+
+    return {
+      mandalId: session.user.mandalId,
+      role: session.user.role,
+      sessionId: payload.sessionId,
+      userId: session.user.id,
+    };
   }
 
   private async createSessionTokenPair(user: User, metadata: SessionMetadata, existingSessionId?: string) {

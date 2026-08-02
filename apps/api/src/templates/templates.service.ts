@@ -9,7 +9,6 @@ import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import { AuthContext } from '../auth/auth-context';
 import { assertSameMandal } from '../auth/tenant-scope';
 import { slugify } from '../common/utils/slugify';
-import { JobsService } from '../jobs/jobs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CreateCustomFieldDto } from './dto/create-custom-field.dto';
@@ -42,7 +41,6 @@ type JsonWriteValue = never;
 @Injectable()
 export class TemplatesService {
   constructor(
-    private readonly jobsService: JobsService,
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
   ) {}
@@ -222,24 +220,12 @@ export class TemplatesService {
       folder: `mandals/${mandalId}/festivals/${festivalId}/templates`,
     });
 
-    await Promise.all([
-      this.audit(ctx, mandalId, 'template_asset', asset.key ?? asset.url, 'uploaded', undefined, {
-        bucket: asset.bucket,
-        key: asset.key,
-        storage: asset.storage,
-        url: asset.url,
-      }),
-      this.jobsService.enqueue({
-        mandalId,
-        payload: {
-          bucket: asset.bucket,
-          festivalId,
-          key: asset.key,
-          storage: asset.storage,
-        },
-        type: 'TEMPLATE_ASSET_AUDIT',
-      }),
-    ]);
+    await this.audit(ctx, mandalId, 'template_asset', asset.key ?? asset.url, 'uploaded', undefined, {
+      bucket: asset.bucket,
+      key: asset.key,
+      storage: asset.storage,
+      url: asset.url,
+    });
 
     return asset;
   }

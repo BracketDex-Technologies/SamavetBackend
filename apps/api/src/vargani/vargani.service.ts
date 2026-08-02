@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -19,12 +18,12 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { AuthContext } from '../auth/auth-context';
 import { requireMandalId } from '../auth/tenant-scope';
 import { AppConfig } from '../config/app-config';
-import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { JobsService } from '../jobs/jobs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CancelSlipDto } from './dto/cancel-slip.dto';
 import { CreateVarganiSlipDto } from './dto/create-vargani-slip.dto';
+import { ListVarganiSlipsQueryDto } from './dto/list-vargani-slips-query.dto';
 import { ShareSlipDto } from './dto/share-slip.dto';
 import { UpdateVarganiSlipDto } from './dto/update-vargani-slip.dto';
 import { UploadSlipReceiptImageDto } from './dto/upload-slip-receipt-image.dto';
@@ -38,12 +37,6 @@ type JsonWriteValue = never;
 
 function isCollectorRole(role: UserRole) {
   return role === UserRole.MEMBER || role === UserRole.GROUP_LEADER;
-}
-
-interface SlipListWhere {
-  collectedByUserId?: string;
-  festivalId: string;
-  mandalId: string;
 }
 
 interface TemplateFieldPlacement {
@@ -81,7 +74,12 @@ interface WhatsAppSlip {
   contributorPhone: string | null;
   customData?: unknown;
   id: string;
-  mandal: { name: string; nameMr?: string | null };
+  mandal: {
+    name: string;
+    nameMr?: string | null;
+    whatsappTemplateVariableCount?: number | null;
+    whatsappTemplateWid?: string | null;
+  };
   mandalId: string;
   receiptImageUrl: string | null;
   slipNumber: string;
@@ -93,14 +91,12 @@ type SlipWithTemplate = Awaited<ReturnType<VarganiService['getSlip']>> & {
 
 @Injectable()
 export class VarganiService {
-  private readonly logger = new Logger(VarganiService.name);
-
   constructor(
-    private readonly jobsService: JobsService,
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly whatsAppReceiptService: WhatsAppReceiptService,
     private readonly storageService: StorageService,
+    private readonly jobsService: JobsService,
   ) {}
 
   async getActiveForm(ctx: AuthContext) {
@@ -194,7 +190,6 @@ export class VarganiService {
       return existing;
     }
 
-    let shouldEnqueueRender = true;
     const slip = await this.prisma.$transaction(async (tx) => {
       const [mandalQuota] = await tx.$queryRaw<Array<{ slipLimit: number | null }>>`
         SELECT "slip_limit" AS "slipLimit" FROM mandals WHERE id = ${mandalId}::uuid FOR UPDATE
@@ -263,36 +258,38 @@ export class VarganiService {
           where: { idempotencyKey: dto.idempotencyKey },
         });
         if (concurrentSlip) {
-          shouldEnqueueRender = false;
           return concurrentSlip;
         }
       }
       throw error;
     });
 
-    if (slip.status === SlipStatus.ACTIVE && shouldEnqueueRender) {
-      void this.jobsService.enqueue({
-        mandalId,
-        payload: {
-          festivalId: festival.id,
-          slipId: slip.id,
-          slipNumber: slip.slipNumber,
-          templateVersionId: slip.templateVersionId,
-        },
-        type: 'RENDER_RECEIPT',
-      }).catch(() => undefined);
-    }
-
     return slip;
   }
 
-  async listSlips(ctx: AuthContext, query: PaginationQueryDto) {
+  async listSlips(ctx: AuthContext, query: ListVarganiSlipsQueryDto) {
     const mandalId = requireMandalId(ctx);
     const festival = await this.getActiveFestival(mandalId);
     const skip = (query.page - 1) * query.limit;
-    const where: SlipListWhere = {
+    const selectedDate = query.date ? new Date(`${query.date}T00:00:00.000Z`) : undefined;
+    const where: Prisma.VarganiSlipWhereInput = {
       festivalId: festival.id,
       mandalId,
+      collectedByUserId: query.createdByUserId,
+      createdAt: selectedDate
+        ? { gte: selectedDate, lt: new Date(selectedDate.getTime() + 24 * 60 * 60 * 1000) }
+        : undefined,
+      status: query.status,
+      OR: query.search?.trim()
+        ? [
+            { slipNumber: { contains: query.search.trim(), mode: 'insensitive' } },
+            { contributorName: { contains: query.search.trim(), mode: 'insensitive' } },
+            { shopName: { contains: query.search.trim(), mode: 'insensitive' } },
+            { contributorAddress: { contains: query.search.trim(), mode: 'insensitive' } },
+            { areaName: { contains: query.search.trim(), mode: 'insensitive' } },
+            { collector: { name: { contains: query.search.trim(), mode: 'insensitive' } } },
+          ]
+        : undefined,
     };
 
     if (isCollectorRole(ctx.role)) {
@@ -330,7 +327,16 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true, nameMr: true, whatsappMode: true } },
+        mandal: {
+          select: {
+            id: true,
+            name: true,
+            nameMr: true,
+            whatsappMode: true,
+            whatsappTemplateVariableCount: true,
+            whatsappTemplateWid: true,
+          },
+        },
         templateVersion: true,
       },
       where: { id, mandalId },
@@ -361,6 +367,7 @@ export class VarganiService {
       dataUrl: dto.dataUrl,
       fileName: `${slip.slipNumber || slip.id}.jpg`,
       folder: `mandals/${slip.mandalId}/festivals/${slip.festivalId}/receipts`,
+      private: true,
     });
 
     const updated = await this.prisma.varganiSlip.update({
@@ -388,7 +395,51 @@ export class VarganiService {
 
     return {
       ok: true,
-      receiptImageUrl: updated.receiptImageUrl,
+      receiptImageUrl: await this.storageService.resolveUrl(updated.receiptImageUrl),
+      storage: asset.storage,
+    };
+  }
+
+  async uploadReceiptImageFile(
+    ctx: AuthContext,
+    id: string,
+    file?: { buffer: Buffer; mimetype: string; originalname: string },
+  ) {
+    if (!file) throw new BadRequestException('Receipt image file is required.');
+    const slip = await this.getSlip(ctx, id);
+    if (slip.status !== SlipStatus.ACTIVE) {
+      throw new BadRequestException('Receipt image can be uploaded only after payment is received.');
+    }
+
+    const asset = await this.storageService.uploadBuffer({
+      body: file.buffer,
+      contentType: file.mimetype,
+      fileName: file.originalname || `${slip.slipNumber || slip.id}.jpg`,
+      folder: `mandals/${slip.mandalId}/festivals/${slip.festivalId}/receipts`,
+      private: true,
+    });
+    const updated = await this.prisma.varganiSlip.update({
+      data: { receiptImageUrl: asset.url, renderStatus: RenderStatus.READY },
+      where: { id: slip.id },
+    });
+    await this.prisma.auditEvent.create({
+      data: {
+        action: 'receipt_image_uploaded',
+        actorUserId: ctx.userId,
+        entityId: slip.id,
+        entityType: 'vargani_slip',
+        mandalId: slip.mandalId,
+        metadata: toJsonWriteValue({
+          receiptImageUrl: asset.url,
+          slipNumber: slip.slipNumber,
+          storage: asset.storage,
+          transport: 'multipart',
+        }),
+      },
+    });
+    return {
+      ok: true,
+      receiptImageUrl: await this.storageService.resolveUrl(updated.receiptImageUrl),
       storage: asset.storage,
     };
   }
@@ -430,19 +481,6 @@ export class VarganiService {
       }),
     ]);
 
-    await this.jobsService.enqueue({
-      mandalId: slip.mandalId,
-      payload: {
-        auditEventId: event.id,
-        channel: dto.channel?.trim() || 'WHATSAPP',
-        phone: dto.phone?.trim() || slip.contributorPhone || null,
-        receiptUrl,
-        slipId: slip.id,
-        slipNumber: slip.slipNumber,
-      },
-      type: 'WHATSAPP_SHARE_AUDIT',
-    });
-
     if (slip.mandal.whatsappMode === 'MANUAL_SHARE') {
       return {
         auditEventId: event.id,
@@ -454,11 +492,22 @@ export class VarganiService {
       };
     }
 
-    const whatsappPromise = this.sendSlipToWhatsApp(slip, dto.phone, receiptUrl);
-    // Unhandled errors caught silently in background, caller returns immediately
-    void whatsappPromise.catch((err) =>
-      this.logger.warn(`Background WhatsApp send failed for ${slip.slipNumber}: ${err}`),
-    );
+    // Until a durable queue is configured, await delivery. Fire-and-forget work
+    // is not reliable on serverless runtimes and can disappear after response.
+    const whatsapp = await this.sendSlipToWhatsApp(slip, dto.phone, receiptUrl);
+    if (whatsapp.status === 'failed') {
+      await this.jobsService.enqueue({
+        deduplicationKey: `whatsapp-receipt:${event.id}`,
+        mandalId: slip.mandalId,
+        payload: {
+          phone: dto.phone?.trim() || slip.contributorPhone || null,
+          receiptUrl,
+          slipId: slip.id,
+        },
+        runAfter: new Date(Date.now() + 60_000),
+        type: 'SEND_WHATSAPP_RECEIPT',
+      });
+    }
 
     return {
       auditEventId: event.id,
@@ -466,7 +515,7 @@ export class VarganiService {
       ok: true,
       receiptUrl,
       sharedAt: event.createdAt,
-      whatsapp: { ok: true, provider: 'AUTHKEY', status: 'sent', receiptUrl },
+      whatsapp,
     };
   }
 
@@ -477,7 +526,16 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true, nameMr: true, whatsappMode: true } },
+        mandal: {
+          select: {
+            id: true,
+            name: true,
+            nameMr: true,
+            whatsappMode: true,
+            whatsappTemplateVariableCount: true,
+            whatsappTemplateWid: true,
+          },
+        },
         templateVersion: true,
       },
       where: {
@@ -494,6 +552,35 @@ export class VarganiService {
     return this.renderReceiptForSlip(slip);
   }
 
+  async processWhatsAppRetry(payload: Record<string, unknown>) {
+    const slipId = readString(payload.slipId);
+    const receiptUrl = readString(payload.receiptUrl);
+    if (!slipId || !receiptUrl) throw new Error('Invalid WhatsApp retry payload.');
+
+    const slip = await this.prisma.varganiSlip.findUnique({
+      include: {
+        mandal: {
+          select: {
+            name: true,
+            nameMr: true,
+            whatsappTemplateVariableCount: true,
+            whatsappTemplateWid: true,
+          },
+        },
+      },
+      where: { id: slipId },
+    });
+    if (!slip || slip.status !== SlipStatus.ACTIVE) {
+      throw new Error('WhatsApp retry slip is unavailable.');
+    }
+
+    const result = await this.sendSlipToWhatsApp(slip, readString(payload.phone), receiptUrl);
+    if (result.status === 'failed') {
+      throw new Error(`WhatsApp provider rejected retry: ${result.reason ?? 'unknown'}`);
+    }
+    return result;
+  }
+
   async renderPublicReceiptHtml(id: string, token?: string) {
     if (!token) {
       throw new NotFoundException('Receipt not found.');
@@ -505,7 +592,16 @@ export class VarganiService {
         collector: { select: { id: true, name: true, phone: true } },
         festival: true,
         group: true,
-        mandal: { select: { id: true, name: true, nameMr: true, whatsappMode: true } },
+        mandal: {
+          select: {
+            id: true,
+            name: true,
+            nameMr: true,
+            whatsappMode: true,
+            whatsappTemplateVariableCount: true,
+            whatsappTemplateWid: true,
+          },
+        },
         templateVersion: true,
       },
       where: {
@@ -576,11 +672,13 @@ export class VarganiService {
     const result = await this.whatsAppReceiptService.sendReceipt({
       contributorName,
       mandalName,
-      mediaUrl: slip.receiptImageUrl,
+      mediaUrl: await this.storageService.resolveUrl(slip.receiptImageUrl, 60 * 60 * 24),
       organizationName: mandalName,
       phone: preferredPhone || slip.contributorPhone,
       receiptUrl,
       slipNumber: slip.slipNumber,
+      templateVariableCount: slip.mandal.whatsappTemplateVariableCount,
+      templateWid: slip.mandal.whatsappTemplateWid,
     });
 
     await this.prisma.auditEvent.create({
@@ -596,6 +694,7 @@ export class VarganiService {
           receiptUrl,
           slipNumber: slip.slipNumber,
           status: result.status,
+          templateWid: result.templateWid ?? null,
         }),
       },
     });
@@ -692,7 +791,8 @@ export class VarganiService {
       areaName: slip.areaName ?? '',
       building_name: String(customData.building_name ?? ''),
       collectorName: slip.collector.name,
-      contributorAddress: slip.contributorAddress ?? '',
+      contributorAddress: readString(customData.contributorAddressMr) || slip.contributorAddress || '',
+      contributorAddressMr: readString(customData.contributorAddressMr) || slip.contributorAddress || '',
       contributorName: slip.contributorName,
       contributorPhone: slip.contributorPhone ?? '',
       createdAt: new Intl.DateTimeFormat('en-IN').format(slip.createdAt),

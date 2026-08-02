@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 type JsonWriteValue = never;
 
 interface EnqueueJobInput {
+  deduplicationKey?: string;
   mandalId?: string | null;
   payload?: Record<string, unknown>;
   runAfter?: Date;
@@ -15,14 +17,25 @@ export class JobsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async enqueue(input: EnqueueJobInput) {
-    return this.prisma.backgroundJob.create({
-      data: {
-        mandalId: input.mandalId ?? null,
-        payload: toJsonWriteValue(input.payload ?? {}),
-        runAfter: input.runAfter ?? new Date(),
-        type: input.type,
-      },
-    });
+    try {
+      return await this.prisma.backgroundJob.create({
+        data: {
+          deduplicationKey: input.deduplicationKey,
+          mandalId: input.mandalId ?? null,
+          payload: toJsonWriteValue(input.payload ?? {}),
+          runAfter: input.runAfter ?? new Date(),
+          type: input.type,
+        },
+      });
+    } catch (error) {
+      if (input.deduplicationKey && isUniqueConstraintError(error)) {
+        const existing = await this.prisma.backgroundJob.findUnique({
+          where: { deduplicationKey: input.deduplicationKey },
+        });
+        if (existing) return existing;
+      }
+      throw error;
+    }
   }
 
   async listRecent(mandalId?: string | null) {
@@ -34,6 +47,11 @@ export class JobsService {
   }
 
   async claimNext(workerId: string) {
+    // Recover work abandoned by a terminated serverless invocation.
+    await this.prisma.backgroundJob.updateMany({
+      data: { lockedAt: null, lockedBy: null, status: 'QUEUED' },
+      where: { lockedAt: { lt: new Date(Date.now() - 5 * 60_000) }, status: 'PROCESSING' },
+    });
     // SKIP LOCKED makes this safe when several API/worker instances scale out.
     const [claimed] = await this.prisma.$queryRaw<Array<{ id: string }>>`
       WITH candidate AS (
@@ -90,4 +108,8 @@ export class JobsService {
 
 function toJsonWriteValue(value: unknown): JsonWriteValue {
   return value as JsonWriteValue;
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }

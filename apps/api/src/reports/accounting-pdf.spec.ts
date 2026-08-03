@@ -16,10 +16,10 @@ describe('createAccountingPdf', () => {
           vendor: 'Shree Decorators',
         },
       ],
-      festivalName: 'Ganeshotsav 2026',
+      festivalName: 'गणेशोत्सव 2026',
       filters: [],
       generatedAt: new Date('2026-08-03T08:30:00.000Z'),
-      mandalName: 'Ganesh Mitra Mandal',
+      mandalName: 'गणेश मित्र मंडळ',
       paymentModes: [
         { amount: 72500, count: 42, label: 'UPI' },
         { amount: 45000, count: 31, label: 'Cash' },
@@ -27,8 +27,8 @@ describe('createAccountingPdf', () => {
       receipts: [
         {
           amount: 2501,
-          collector: 'Sagar Jadhav',
-          contributor: 'Mahesh Traders',
+          collector: 'सागर जाधव',
+          contributor: 'महेश ट्रेडर्स',
           date: new Date('2026-08-02T10:30:00.000Z'),
           paymentMode: 'UPI',
           slipNumber: 'DM-GAN-2026-000101',
@@ -55,7 +55,8 @@ describe('createAccountingPdf', () => {
     const file = Buffer.concat(chunks);
 
     expect(file.subarray(0, 5).toString()).toBe('%PDF-');
-    expect(file.length).toBeGreaterThan(4_000);
+    expect(file.length).toBeGreaterThan(8_000);
     expect(file.toString('latin1')).toContain('/Title');
+    expect(file.toString('latin1')).toContain('/ToUnicode');
   });
 });

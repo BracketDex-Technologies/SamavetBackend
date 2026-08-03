@@ -85,6 +85,7 @@ describe('WhatsAppReceiptService', () => {
     const payload = JSON.parse(String(request?.body)) as Record<string, unknown>;
     expect(payload.wid).toBe('42702');
     expect(payload.bodyValues).toBeUndefined();
+    expect(request?.signal).toBeInstanceOf(AbortSignal);
     expect(result).toMatchObject({ ok: true, status: 'sent' });
   });
 });

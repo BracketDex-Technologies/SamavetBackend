@@ -150,6 +150,7 @@ export class WhatsAppReceiptService {
           'Content-Type': 'application/json',
         },
         method: 'POST',
+        signal: AbortSignal.timeout(10_000),
       });
 
       const responseText = await response.text();

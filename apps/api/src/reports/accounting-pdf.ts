@@ -1,6 +1,13 @@
 import PDFDocument from 'pdfkit';
 import { PassThrough } from 'node:stream';
 
+const DEVANAGARI_FONT = 'NotoSansDevanagari';
+const DEVANAGARI_FONT_PATH = require.resolve(
+  '@fontsource/noto-sans-devanagari/files/noto-sans-devanagari-devanagari-400-normal.woff',
+);
+const DEVANAGARI_PATTERN = /[\u0900-\u097F]/u;
+const GRAPHEME_SEGMENTER = new Intl.Segmenter('mr', { granularity: 'grapheme' });
+
 export interface AccountingBreakdownRow {
   amount: number;
   count: number;
@@ -77,6 +84,7 @@ export function createAccountingPdf(data: AccountingPdfData): PassThrough {
     margin: MARGIN,
     size: 'A4',
   });
+  doc.registerFont(DEVANAGARI_FONT, DEVANAGARI_FONT_PATH);
   doc.pipe(output);
 
   drawReportHeader(doc, data);
@@ -117,8 +125,17 @@ function drawReportHeader(doc: PDFKit.PDFDocument, data: AccountingPdfData): voi
   doc.roundedRect(MARGIN, MARGIN, CONTENT_WIDTH, 74, 12).fill(INK);
   doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(20)
     .text('Financial Analysis Report', MARGIN + 22, MARGIN + 17, { width: 430 });
-  doc.fillColor('#FED7AA').font('Helvetica').fontSize(9)
-    .text(`${data.mandalName}  |  ${data.festivalName}`, MARGIN + 22, MARGIN + 46, { width: 500 });
+  drawMultiscriptText(
+    doc,
+    `${data.mandalName}  |  ${data.festivalName}`,
+    MARGIN + 22,
+    MARGIN + 46,
+    500,
+    12,
+    'left',
+    '#FED7AA',
+    9,
+  );
   doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(9)
     .text(data.reportPeriod, PAGE_WIDTH - MARGIN - 260, MARGIN + 18, { align: 'right', width: 238 });
   doc.fillColor('#D1D5DB').font('Helvetica').fontSize(8)
@@ -269,14 +286,18 @@ function drawTableRow(
   values.forEach((value, index) => {
     if (!visibleColumns.includes(index)) return;
     const align = rightAlignedColumns.includes(index) ? 'right' : 'left';
-    doc.fillColor(bold ? ORANGE : INK).font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(7.5)
-      .text(truncate(value, widths[index] > 160 ? 40 : 22), x + 7, y + 8, {
-        align,
-        ellipsis: true,
-        height: 10,
-        lineBreak: false,
-        width: widths[index] - 14,
-      });
+    drawMultiscriptText(
+      doc,
+      truncate(value, widths[index] > 160 ? 40 : 22),
+      x + 7,
+      y + 8,
+      widths[index] - 14,
+      10,
+      align,
+      bold ? ORANGE : INK,
+      7.5,
+      bold,
+    );
     x += widths[index];
   });
   doc.y = y + rowHeight;
@@ -337,6 +358,53 @@ function formatDateTime(value: Date): string {
 }
 
 function truncate(value: string, limit: number): string {
-  if (value.length <= limit) return value;
-  return `${value.slice(0, Math.max(0, limit - 3))}...`;
+  const graphemes = Array.from(GRAPHEME_SEGMENTER.segment(value), ({ segment }) => segment);
+  if (graphemes.length <= limit) return value;
+  return `${graphemes.slice(0, Math.max(0, limit - 3)).join('')}...`;
+}
+
+function drawMultiscriptText(
+  doc: PDFKit.PDFDocument,
+  value: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  align: 'left' | 'right',
+  color: string,
+  fontSize: number,
+  bold = false,
+): void {
+  const normalized = value.normalize('NFC');
+  const runs = splitFontRuns(normalized);
+  const fallbackFont = bold ? 'Helvetica-Bold' : 'Helvetica';
+  const measuredRuns = runs.map((run) => {
+    const font = run.devanagari ? DEVANAGARI_FONT : fallbackFont;
+    doc.font(font).fontSize(fontSize);
+    return { ...run, font, width: doc.widthOfString(run.text) };
+  });
+  const totalWidth = measuredRuns.reduce((sum, run) => sum + run.width, 0);
+  let cursorX = align === 'right' ? Math.max(x, x + width - totalWidth) : x;
+
+  doc.save().rect(x, y - 1, width, height + 2).clip();
+  for (const run of measuredRuns) {
+    doc.fillColor(color).font(run.font).fontSize(fontSize)
+      .text(run.text, cursorX, y, { lineBreak: false });
+    cursorX += run.width;
+  }
+  doc.restore();
+}
+
+function splitFontRuns(value: string): Array<{ devanagari: boolean; text: string }> {
+  const runs: Array<{ devanagari: boolean; text: string }> = [];
+  for (const character of value) {
+    const devanagari = DEVANAGARI_PATTERN.test(character);
+    const previous = runs.at(-1);
+    if (previous?.devanagari === devanagari) {
+      previous.text += character;
+    } else {
+      runs.push({ devanagari, text: character });
+    }
+  }
+  return runs;
 }

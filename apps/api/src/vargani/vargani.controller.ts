@@ -61,8 +61,13 @@ export class VarganiController {
 
   @Post('slips/:id/receipt-image')
   @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER, UserRole.MEMBER)
-  uploadReceiptImage(@AuthUser() ctx: AuthContext, @Param('id') id: string, @Body() dto: UploadSlipReceiptImageDto) {
-    return this.varganiService.uploadReceiptImage(ctx, id, dto);
+  uploadReceiptImage(
+    @AuthUser() ctx: AuthContext,
+    @Param('id') id: string,
+    @Body() dto: UploadSlipReceiptImageDto,
+    @Query('autoShare') autoShare?: string,
+  ) {
+    return this.varganiService.uploadReceiptImage(ctx, id, dto, autoShare === 'true');
   }
 
   @Post('slips/:id/receipt-image-file')
@@ -72,8 +77,9 @@ export class VarganiController {
     @AuthUser() ctx: AuthContext,
     @Param('id') id: string,
     @UploadedFile() file?: { buffer: Buffer; mimetype: string; originalname: string },
+    @Query('autoShare') autoShare?: string,
   ) {
-    return this.varganiService.uploadReceiptImageFile(ctx, id, file);
+    return this.varganiService.uploadReceiptImageFile(ctx, id, file, autoShare === 'true');
   }
 
   @Patch('slips/:id')

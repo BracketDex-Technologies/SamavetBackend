@@ -357,7 +357,7 @@ export class VarganiService {
     return this.renderReceiptForSlip(slip);
   }
 
-  async uploadReceiptImage(ctx: AuthContext, id: string, dto: UploadSlipReceiptImageDto) {
+  async uploadReceiptImage(ctx: AuthContext, id: string, dto: UploadSlipReceiptImageDto, autoShare = false) {
     const slip = await this.getSlip(ctx, id);
     if (slip.status !== SlipStatus.ACTIVE) {
       throw new BadRequestException('Receipt image can be uploaded only after payment is received.');
@@ -393,9 +393,14 @@ export class VarganiService {
       },
     });
 
+    const share = autoShare && !slip.receiptImageUrl && slip.mandal.whatsappMode !== 'MANUAL_SHARE'
+      ? await this.recordShare(ctx, slip.id, { channel: 'WHATSAPP', phone: slip.contributorPhone ?? undefined })
+      : undefined;
+
     return {
       ok: true,
       receiptImageUrl: await this.storageService.resolveUrl(updated.receiptImageUrl),
+      share,
       storage: asset.storage,
     };
   }
@@ -404,6 +409,7 @@ export class VarganiService {
     ctx: AuthContext,
     id: string,
     file?: { buffer: Buffer; mimetype: string; originalname: string },
+    autoShare = false,
   ) {
     if (!file) throw new BadRequestException('Receipt image file is required.');
     const slip = await this.getSlip(ctx, id);
@@ -437,9 +443,13 @@ export class VarganiService {
         }),
       },
     });
+    const share = autoShare && !slip.receiptImageUrl && slip.mandal.whatsappMode !== 'MANUAL_SHARE'
+      ? await this.recordShare(ctx, slip.id, { channel: 'WHATSAPP', phone: slip.contributorPhone ?? undefined })
+      : undefined;
     return {
       ok: true,
       receiptImageUrl: await this.storageService.resolveUrl(updated.receiptImageUrl),
+      share,
       storage: asset.storage,
     };
   }

@@ -7,6 +7,36 @@ interface AzureTransliterationResult {
   text?: string;
 }
 
+// Transliteration engines cannot infer the canonical spelling of ambiguous
+// place names. Keep verified, domain-specific spellings ahead of the provider.
+const MARATHI_ADDRESS_GLOSSARY: Readonly<Record<string, string>> = {
+  'natu baug': 'नातूबाग',
+  natubag: 'नातूबाग',
+  natubaug: 'नातूबाग',
+  wanawadi: 'वानवडी',
+  'wanawadi gaon': 'वानवडी गाव',
+  wanowrie: 'वानवडी',
+  wanwadi: 'वानवडी',
+  'wanwadi gaon': 'वानवडी गाव',
+};
+
+const MARATHI_OUTPUT_CORRECTIONS: Readonly<Record<string, string>> = {
+  वनवडी: 'वानवडी',
+  वनावाडी: 'वानवडी',
+  वानवाडी: 'वानवडी',
+};
+
+function normalizeLookup(text: string) {
+  return text.toLocaleLowerCase('en-IN').replace(/\s+/g, ' ').trim();
+}
+
+function correctKnownMarathiSpellings(text: string) {
+  return Object.entries(MARATHI_OUTPUT_CORRECTIONS).reduce(
+    (current, [variant, canonical]) => current.replaceAll(variant, canonical),
+    text,
+  );
+}
+
 @Injectable()
 export class TranslationService {
   private readonly cache = new Map<string, string>();
@@ -17,7 +47,11 @@ export class TranslationService {
     const text = input.trim();
     if (!/[A-Za-z]/.test(text)) return { provider: 'unchanged', text };
 
-    const cached = this.cache.get(text.toLocaleLowerCase('en-IN'));
+    const lookup = normalizeLookup(text);
+    const glossaryMatch = MARATHI_ADDRESS_GLOSSARY[lookup];
+    if (glossaryMatch) return { provider: 'locality-glossary', text: glossaryMatch };
+
+    const cached = this.cache.get(lookup);
     if (cached) return { provider: 'azure-cache', text: cached };
 
     const key = this.config.get('AZURE_TRANSLATOR_KEY', { infer: true }).trim();
@@ -55,8 +89,9 @@ export class TranslationService {
       const translated = payload[0]?.text?.trim();
       if (!translated) throw new ServiceUnavailableException('Azure Marathi transliteration returned no text.');
 
-      this.remember(text, translated);
-      return { provider: 'azure', text: translated };
+      const corrected = correctKnownMarathiSpellings(translated);
+      this.remember(text, corrected);
+      return { provider: 'azure', text: corrected };
     } catch (error) {
       if (error instanceof ServiceUnavailableException) throw error;
       throw new ServiceUnavailableException('Azure Marathi transliteration is temporarily unavailable.');

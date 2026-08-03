@@ -23,6 +23,32 @@ describe('TranslationService', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('uses the canonical Marathi spelling for known Pune localities', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch');
+    const service = createService({ AZURE_TRANSLATOR_KEY: '' });
+
+    await expect(service.transliterateMarathi('Wanawadi')).resolves.toEqual({
+      provider: 'locality-glossary',
+      text: 'वानवडी',
+    });
+    await expect(service.transliterateMarathi('  WANWADI  ')).resolves.toEqual({
+      provider: 'locality-glossary',
+      text: 'वानवडी',
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('corrects known locality variants returned by Azure', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify([{ script: 'Deva', text: 'वनावाडी, पुणे' }]), { status: 200 }),
+    );
+
+    await expect(createService().transliterateMarathi('Wanawadi, Pune')).resolves.toEqual({
+      provider: 'azure',
+      text: 'वानवडी, पुणे',
+    });
+  });
+
   it('calls Azure Marathi Latin-to-Devanagari transliteration and caches the result', async () => {
     const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify([{ script: 'Deva', text: 'सदाशिव पेठ' }]), { status: 200 }));
     const service = createService();

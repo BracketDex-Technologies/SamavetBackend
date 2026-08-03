@@ -3,6 +3,7 @@ import { ExpenseStatus } from '@prisma/client';
 import { AuthContext } from '../auth/auth-context';
 import { assertSameMandal } from '../auth/tenant-scope';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { CreateExpenseCategoryDto } from './dto/create-expense-category.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
@@ -12,7 +13,10 @@ type JsonWriteValue = never;
 
 @Injectable()
 export class ExpensesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storageService: StorageService,
+  ) {}
 
   async createCategory(ctx: AuthContext, mandalId: string, dto: CreateExpenseCategoryDto) {
     assertSameMandal(ctx, mandalId);
@@ -39,14 +43,25 @@ export class ExpensesService {
     mandalId: string,
     festivalId: string,
     dto: CreateExpenseDto,
+    proofPhoto?: { buffer: Buffer; mimetype: string; originalname: string },
   ) {
     assertSameMandal(ctx, mandalId);
 
-    return this.prisma.$transaction(async (tx) => {
+    const proofAsset = proofPhoto
+      ? await this.storageService.uploadBuffer({
+          body: proofPhoto.buffer,
+          contentType: proofPhoto.mimetype,
+          fileName: proofPhoto.originalname,
+          folder: `mandals/${mandalId}/festivals/${festivalId}/expense-proofs`,
+          private: true,
+        })
+      : null;
+
+    const expense = await this.prisma.$transaction(async (tx) => {
       const expense = await tx.expense.create({
         data: {
           amount: dto.amount,
-          billFileUrl: dto.billFileUrl,
+          billFileUrl: proofAsset?.url ?? dto.billFileUrl,
           categoryId: dto.categoryId,
           createdBy: ctx.userId,
           expenseDate: new Date(dto.expenseDate),
@@ -71,12 +86,14 @@ export class ExpensesService {
 
       return expense;
     });
+
+    return this.withResolvedProofUrl(expense);
   }
 
   async listExpenses(ctx: AuthContext, mandalId: string, festivalId: string) {
     assertSameMandal(ctx, mandalId);
 
-    return this.prisma.expense.findMany({
+    const expenses = await this.prisma.expense.findMany({
       include: {
         approver: { select: { id: true, name: true } },
         category: true,
@@ -85,6 +102,8 @@ export class ExpensesService {
       orderBy: { expenseDate: 'desc' },
       where: { festivalId, mandalId },
     });
+
+    return Promise.all(expenses.map((expense) => this.withResolvedProofUrl(expense)));
   }
 
   async updateStatus(
@@ -112,7 +131,7 @@ export class ExpensesService {
     });
 
     await this.audit(ctx, mandalId, expenseId, 'expense_status_updated', expense, updated);
-    return updated;
+    return this.withResolvedProofUrl(updated);
   }
 
   async updateExpense(
@@ -146,7 +165,7 @@ export class ExpensesService {
     });
 
     await this.audit(ctx, mandalId, expenseId, 'expense_updated', before, updated);
-    return updated;
+    return this.withResolvedProofUrl(updated);
   }
 
   async deleteExpense(ctx: AuthContext, mandalId: string, festivalId: string, expenseId: string) {
@@ -188,5 +207,12 @@ export class ExpensesService {
 
   private toJson(value: unknown): JsonWriteValue {
     return value as JsonWriteValue;
+  }
+
+  private async withResolvedProofUrl<T extends { billFileUrl: string | null }>(expense: T) {
+    return {
+      ...expense,
+      billFileUrl: await this.storageService.resolveUrl(expense.billFileUrl),
+    };
   }
 }

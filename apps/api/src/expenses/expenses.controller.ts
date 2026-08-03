@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { AuthContext } from '../auth/auth-context';
 import { AuthUser } from '../auth/decorators/auth-user.decorator';
@@ -36,14 +37,17 @@ export class ExpensesController {
   }
 
   @Post()
+  @ApiConsumes('application/json', 'multipart/form-data')
+  @UseInterceptors(FileInterceptor('proofPhoto', { limits: { fileSize: 6 * 1024 * 1024, files: 1 } }))
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR)
   createExpense(
     @AuthUser() ctx: AuthContext,
     @Param('mandalId') mandalId: string,
     @Param('festivalId') festivalId: string,
     @Body() dto: CreateExpenseDto,
+    @UploadedFile() proofPhoto?: { buffer: Buffer; mimetype: string; originalname: string },
   ) {
-    return this.expensesService.createExpense(ctx, mandalId, festivalId, dto);
+    return this.expensesService.createExpense(ctx, mandalId, festivalId, dto, proofPhoto);
   }
 
   @Get()

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ExpenseStatus } from '@prisma/client';
+import { Type } from 'class-transformer';
 import { IsEnum, IsISO8601, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
 export class CreateExpenseDto {
@@ -9,6 +10,7 @@ export class CreateExpenseDto {
   categoryId?: string;
 
   @ApiProperty({ example: 42000 })
+  @Type(() => Number)
   @Min(1)
   amount!: number;
 

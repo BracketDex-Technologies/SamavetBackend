@@ -88,27 +88,27 @@ enum TaskPriority {
 }
 
 model Mandal {
-  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name         String
-  nameMr       String?       @map("name_mr")
-  slug         String        @unique
-  logoUrl      String?       @map("logo_url")
-  address      String?
-  locality     String?
-  city         String?
-  state        String?
-  contactName  String?       @map("contact_name")
-  contactPhone String?       @map("contact_phone")
-  slipLimit    Int?          @map("slip_limit")
-  whatsappMode String        @default("AUTO_API") @map("whatsapp_mode")
-  whatsappTemplateWid           String? @map("whatsapp_template_wid")
-  whatsappTemplateName          String? @map("whatsapp_template_name")
-  whatsappTemplateLanguage      String? @map("whatsapp_template_language")
-  whatsappTemplateVariableCount Int?    @map("whatsapp_template_variable_count")
-  status       AccountStatus @default(ACTIVE)
-  plan         String        @default("starter")
-  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                          String
+  nameMr                        String?       @map("name_mr")
+  slug                          String        @unique
+  logoUrl                       String?       @map("logo_url")
+  address                       String?
+  locality                      String?
+  city                          String?
+  state                         String?
+  contactName                   String?       @map("contact_name")
+  contactPhone                  String?       @map("contact_phone")
+  slipLimit                     Int?          @map("slip_limit")
+  whatsappMode                  String        @default("AUTO_API") @map("whatsapp_mode")
+  whatsappTemplateWid           String?       @map("whatsapp_template_wid")
+  whatsappTemplateName          String?       @map("whatsapp_template_name")
+  whatsappTemplateLanguage      String?       @map("whatsapp_template_language")
+  whatsappTemplateVariableCount Int?          @map("whatsapp_template_variable_count")
+  status                        AccountStatus @default(ACTIVE)
+  plan                          String        @default("starter")
+  createdAt                     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   users        User[]
   festivals    Festival[]
@@ -152,6 +152,7 @@ model User {
   @@unique([phone])
   @@unique([email])
   @@index([mandalId, role])
+  @@index([mandalId, status, createdAt])
   @@map("users")
 }
 
@@ -198,6 +199,7 @@ model Festival {
   slipSequence          SlipSequence?
 
   @@index([mandalId, status])
+  @@index([mandalId, status, startDate])
   @@map("festivals")
 }
 
@@ -211,9 +213,9 @@ model MemberGroup {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  mandal   Mandal        @relation(fields: [mandalId], references: [id], onDelete: Restrict)
-  festival Festival      @relation(fields: [festivalId], references: [id], onDelete: Cascade)
-  leader   User?         @relation("GroupLeader", fields: [leaderUserId], references: [id], onDelete: SetNull)
+  mandal   Mandal         @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  festival Festival       @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+  leader   User?          @relation("GroupLeader", fields: [leaderUserId], references: [id], onDelete: SetNull)
   members  Member[]
   slips    VarganiSlip[]
   tasks    FestivalTask[]
@@ -242,6 +244,7 @@ model Member {
 
   @@unique([mandalId, festivalId, userId])
   @@index([mandalId, festivalId, groupId])
+  @@index([mandalId, festivalId, status, displayName])
   @@map("members")
 }
 
@@ -260,6 +263,7 @@ model SlipTemplate {
   versions SlipTemplateVersion[]
 
   @@index([mandalId, festivalId])
+  @@index([mandalId, festivalId, updatedAt])
   @@map("slip_templates")
 }
 
@@ -418,10 +422,10 @@ model FestivalTask {
   createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  mandal   Mandal   @relation(fields: [mandalId], references: [id], onDelete: Restrict)
-  festival Festival @relation(fields: [festivalId], references: [id], onDelete: Cascade)
-  assignee User?    @relation("TaskAssignee", fields: [assigneeUserId], references: [id], onDelete: SetNull)
-  creator  User     @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  mandal   Mandal       @relation(fields: [mandalId], references: [id], onDelete: Restrict)
+  festival Festival     @relation(fields: [festivalId], references: [id], onDelete: Cascade)
+  assignee User?        @relation("TaskAssignee", fields: [assigneeUserId], references: [id], onDelete: SetNull)
+  creator  User         @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   group    MemberGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   @@index([mandalId, festivalId, status, dueDate])
@@ -431,23 +435,23 @@ model FestivalTask {
 }
 
 model BackgroundJob {
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  mandalId     String?   @map("mandal_id") @db.Uuid
-  deduplicationKey String? @unique @map("deduplication_key")
-  type         String
-  status       String    @default("QUEUED")
-  payload      Json      @default("{}")
-  attempts     Int       @default(0)
-  maxAttempts  Int       @default(3) @map("max_attempts")
-  runAfter     DateTime  @default(now()) @map("run_after") @db.Timestamptz(6)
-  startedAt    DateTime? @map("started_at") @db.Timestamptz(6)
-  completedAt  DateTime? @map("completed_at") @db.Timestamptz(6)
-  failedAt     DateTime? @map("failed_at") @db.Timestamptz(6)
-  lockedAt     DateTime? @map("locked_at") @db.Timestamptz(6)
-  lockedBy     String?   @map("locked_by")
-  lastError    String?   @map("last_error")
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mandalId         String?   @map("mandal_id") @db.Uuid
+  deduplicationKey String?   @unique @map("deduplication_key")
+  type             String
+  status           String    @default("QUEUED")
+  payload          Json      @default("{}")
+  attempts         Int       @default(0)
+  maxAttempts      Int       @default(3) @map("max_attempts")
+  runAfter         DateTime  @default(now()) @map("run_after") @db.Timestamptz(6)
+  startedAt        DateTime? @map("started_at") @db.Timestamptz(6)
+  completedAt      DateTime? @map("completed_at") @db.Timestamptz(6)
+  failedAt         DateTime? @map("failed_at") @db.Timestamptz(6)
+  lockedAt         DateTime? @map("locked_at") @db.Timestamptz(6)
+  lockedBy         String?   @map("locked_by")
+  lastError        String?   @map("last_error")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   mandal Mandal? @relation(fields: [mandalId], references: [id], onDelete: SetNull)
 
@@ -474,5 +478,6 @@ model AuditEvent {
   @@index([mandalId, entityType, entityId])
   @@index([mandalId, createdAt])
   @@index([actorUserId, createdAt])
+  @@index([mandalId, action, createdAt])
   @@map("audit_events")
 }

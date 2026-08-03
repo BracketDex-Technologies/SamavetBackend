@@ -28,7 +28,7 @@ function createService(session: unknown, strict = true) {
 
 describe('AuthService access-session verification', () => {
   it('uses current database authorization rather than stale JWT claims', async () => {
-    const { service } = createService({
+    const { prisma, service } = createService({
       expiresAt: new Date(Date.now() + 60_000),
       revokedAt: null,
       user: {
@@ -45,6 +45,13 @@ describe('AuthService access-session verification', () => {
       sessionId: 'session-1',
       userId: 'user-1',
     });
+    await expect(service.verifyAccessToken('signed-token')).resolves.toEqual({
+      mandalId: 'current-mandal',
+      role: UserRole.MANDAL_ADMIN,
+      sessionId: 'session-1',
+      userId: 'user-1',
+    });
+    expect(prisma.userSession.findFirst).toHaveBeenCalledTimes(1);
   });
 
   it.each([

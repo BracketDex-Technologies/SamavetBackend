@@ -139,6 +139,38 @@ export class StorageService {
     return data.signedUrl;
   }
 
+  async resolveUrls(values: Array<string | null | undefined>, expiresInSeconds = this.signedUrlTtlSeconds) {
+    const resolved = values.map((value) => value ?? null);
+    if (!this.client) return resolved;
+
+    const groups = new Map<string, Array<{ index: number; key: string }>>();
+    values.forEach((value, index) => {
+      if (!value?.startsWith('supabase://')) return;
+      const reference = parseStorageReference(value);
+      if (!reference) {
+        resolved[index] = null;
+        return;
+      }
+      const entries = groups.get(reference.bucket) ?? [];
+      entries.push({ index, key: reference.key });
+      groups.set(reference.bucket, entries);
+    });
+
+    await Promise.all([...groups.entries()].map(async ([bucket, entries]) => {
+      const { data, error } = await this.client!.storage
+        .from(bucket)
+        .createSignedUrls(entries.map((entry) => entry.key), expiresInSeconds);
+      if (error) {
+        throw new InternalServerErrorException(`Supabase Storage signed URLs failed: ${error.message}`);
+      }
+      entries.forEach((entry, position) => {
+        resolved[entry.index] = data[position]?.signedUrl ?? null;
+      });
+    }));
+
+    return resolved;
+  }
+
   private async ensureBucket(bucketName: string, isPublic: boolean) {
     if (!this.client || this.readyBuckets.has(bucketName)) return;
 

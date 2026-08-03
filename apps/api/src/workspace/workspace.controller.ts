@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { AuthUser } from '../auth/decorators/auth-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -19,6 +19,7 @@ export class WorkspaceController {
   }
 
   @Get('summary')
+  @Header('Cache-Control', 'private, max-age=5, stale-while-revalidate=10')
   @ApiOkResponse({ description: 'Returns lightweight dashboard metrics for fast refreshes.' })
   summary(@AuthUser() authUser: AuthContext) {
     return this.workspaceService.summary(authUser);

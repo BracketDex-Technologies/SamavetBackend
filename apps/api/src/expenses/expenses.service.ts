@@ -103,7 +103,8 @@ export class ExpensesService {
       where: { festivalId, mandalId },
     });
 
-    return Promise.all(expenses.map((expense) => this.withResolvedProofUrl(expense)));
+    const resolvedProofUrls = await this.storageService.resolveUrls(expenses.map((expense) => expense.billFileUrl));
+    return expenses.map((expense, index) => ({ ...expense, billFileUrl: resolvedProofUrls[index] }));
   }
 
   async updateStatus(

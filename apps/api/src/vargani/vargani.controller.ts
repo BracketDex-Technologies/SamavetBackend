@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UserRole } from '@prisma/client';
@@ -92,6 +92,12 @@ export class VarganiController {
   @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR)
   cancelSlip(@AuthUser() ctx: AuthContext, @Param('id') id: string, @Body() dto: CancelSlipDto) {
     return this.varganiService.cancelSlip(ctx, id, dto);
+  }
+
+  @Delete('slips/:id')
+  @Roles(UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR)
+  deleteSlip(@AuthUser() ctx: AuthContext, @Param('id') id: string) {
+    return this.varganiService.deleteSlip(ctx, id);
   }
 }
 

@@ -913,6 +913,31 @@ export class VarganiService {
     });
   }
 
+  async deleteSlip(ctx: AuthContext, id: string) {
+    const mandalId = requireMandalId(ctx);
+    const slip = await this.prisma.varganiSlip.findFirst({ where: { id, mandalId } });
+
+    if (!slip) {
+      throw new NotFoundException('Slip not found.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.varganiSlip.delete({ where: { id } });
+      await tx.auditEvent.create({
+        data: {
+          action: 'deleted',
+          actorUserId: ctx.userId,
+          before: toJsonWriteValue(slip),
+          entityId: id,
+          entityType: 'vargani_slip',
+          mandalId,
+        },
+      });
+
+      return { deleted: true, id };
+    });
+  }
+
   async updateSlip(ctx: AuthContext, id: string, dto: UpdateVarganiSlipDto) {
     const mandalId = requireMandalId(ctx);
     const slip = await this.prisma.varganiSlip.findFirst({ where: { id, mandalId } });

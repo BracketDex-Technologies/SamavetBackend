@@ -72,6 +72,7 @@ const appConfigSchema = z.object({
   AZURE_TRANSLATOR_ENDPOINT: z.string().url().default('https://api.cognitive.microsofttranslator.com'),
   AZURE_TRANSLATOR_KEY: z.string().optional().default(''),
   AZURE_TRANSLATOR_REGION: z.string().optional().default(''),
+  GOOGLE_TRANSLATE_API_KEY: z.string().optional().default(''),
   CORS_ORIGINS: z.string().optional(),
 });
 

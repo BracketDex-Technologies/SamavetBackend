@@ -20,6 +20,7 @@ type LoginUser = Pick<User, 'id' | 'mandalId' | 'name' | 'passwordHash' | 'role'
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly accessSessionCache = new Map<string, { context: AuthContext; expiresAt: number }>();
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
@@ -44,6 +45,7 @@ export class AuthService {
     }
 
     const session = await this.createSessionTokenPair(user, metadata);
+    this.rememberAccessSession(session.sessionId, user);
     this.recordLoginSideEffects(user.id, session.sessionId).catch((error: unknown) => {
       this.logger.warn(JSON.stringify({
         detail: error instanceof Error ? error.message : 'Unknown login side-effect error',
@@ -88,6 +90,7 @@ export class AuthService {
     }
 
     const nextSession = await this.createSessionTokenPair(session.user, metadata, session.id);
+    this.rememberAccessSession(nextSession.sessionId, session.user);
     return this.sessionResponse(nextSession, session.user);
   }
 
@@ -153,6 +156,12 @@ export class AuthService {
       };
     }
 
+    const cached = this.accessSessionCache.get(payload.sessionId);
+    if (cached && cached.expiresAt > Date.now() && cached.context.userId === payload.sub) {
+      return cached.context;
+    }
+    if (cached) this.accessSessionCache.delete(payload.sessionId);
+
     const session = await this.prisma.userSession.findFirst({
       select: {
         expiresAt: true,
@@ -171,12 +180,14 @@ export class AuthService {
       throw new UnauthorizedException('Session is no longer active.');
     }
 
-    return {
+    const context = {
       mandalId: session.user.mandalId,
       role: session.user.role,
       sessionId: payload.sessionId,
       userId: session.user.id,
     };
+    this.rememberAccessSession(payload.sessionId, session.user);
+    return context;
   }
 
   private async createSessionTokenPair(
@@ -293,6 +304,7 @@ export class AuthService {
   }
 
   private async revokeSession(sessionId: string): Promise<void> {
+    this.accessSessionCache.delete(sessionId);
     await this.prisma.userSession.updateMany({
       data: { revokedAt: new Date() },
       where: {
@@ -312,6 +324,24 @@ export class AuthService {
     }
 
     return payload;
+  }
+
+  private rememberAccessSession(sessionId: string, user: Pick<User, 'id' | 'mandalId' | 'role'>) {
+    if (this.accessSessionCache.size >= 5_000) {
+      const oldestKey = this.accessSessionCache.keys().next().value;
+      if (oldestKey) this.accessSessionCache.delete(oldestKey);
+    }
+    this.accessSessionCache.set(sessionId, {
+      context: {
+        mandalId: user.mandalId,
+        role: user.role,
+        sessionId,
+        userId: user.id,
+      },
+      // A short TTL removes repeated DB checks during request bursts while
+      // keeping suspension/revocation propagation tightly bounded.
+      expiresAt: Date.now() + 15_000,
+    });
   }
 }
 

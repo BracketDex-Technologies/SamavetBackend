@@ -92,13 +92,14 @@ export class JobsService {
   async fail(id: string, error: unknown) {
     const job = await this.prisma.backgroundJob.findUnique({ where: { id } });
     const status = job && job.attempts >= job.maxAttempts ? 'FAILED' : 'QUEUED';
+    const retryDelayMs = Math.min(15 * 60_000, 30_000 * 2 ** Math.max(0, (job?.attempts ?? 1) - 1));
     return this.prisma.backgroundJob.update({
       data: {
         failedAt: status === 'FAILED' ? new Date() : null,
         lastError: error instanceof Error ? error.message : String(error),
         lockedAt: null,
         lockedBy: null,
-        runAfter: new Date(Date.now() + 60_000),
+        runAfter: new Date(Date.now() + retryDelayMs),
         status,
       },
       where: { id },

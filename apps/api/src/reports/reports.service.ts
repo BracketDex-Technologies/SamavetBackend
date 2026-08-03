@@ -1,11 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { PaymentMode, SlipStatus } from '@prisma/client';
+import { ExpenseStatus, PaymentMode, SlipStatus } from '@prisma/client';
 import { stream as ExcelStream } from 'exceljs';
 import { PassThrough } from 'node:stream';
 import { AuthContext } from '../auth/auth-context';
 import { assertSameMandal } from '../auth/tenant-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CollectionReportQueryDto } from './dto/collection-report-query.dto';
+import { createAccountingPdf } from './accounting-pdf';
 
 interface SlipReportWhere {
   areaName?: string;
@@ -363,11 +364,204 @@ export class ReportsService {
 
     return output;
   }
+
+  async exportAccountingSummaryPdf(
+    ctx: AuthContext,
+    mandalId: string,
+    festivalId: string,
+    query: CollectionReportQueryDto,
+  ): Promise<PassThrough> {
+    assertSameMandal(ctx, mandalId);
+
+    const createdAt =
+      query.dateFrom || query.dateTo
+        ? {
+            gte: query.dateFrom ? new Date(query.dateFrom) : undefined,
+            lte: query.dateTo ? reportEndDate(query.dateTo) : undefined,
+          }
+        : undefined;
+    const expenseDate = createdAt ? { gte: createdAt.gte, lte: createdAt.lte } : undefined;
+    const slipWhere = {
+      areaName: query.areaName,
+      collectedByUserId: query.memberId,
+      createdAt,
+      festivalId,
+      groupId: query.groupId,
+      mandalId,
+      paymentMode: query.paymentMode,
+    };
+    const approvedExpenseWhere = {
+      expenseDate,
+      festivalId,
+      mandalId,
+      status: ExpenseStatus.APPROVED,
+    };
+
+    const [
+      mandal,
+      festival,
+      statusSummary,
+      paymentSummary,
+      expenseSummary,
+      expenseCategorySummary,
+      recentReceipts,
+      recentExpenses,
+    ] = await Promise.all([
+      this.prisma.mandal.findUnique({ select: { name: true }, where: { id: mandalId } }),
+      this.prisma.festival.findUnique({
+        select: { endDate: true, name: true, startDate: true },
+        where: { id: festivalId },
+      }),
+      this.prisma.varganiSlip.groupBy({
+        _count: { id: true },
+        _sum: { amount: true },
+        by: ['status'],
+        where: slipWhere,
+      }),
+      this.prisma.varganiSlip.groupBy({
+        _count: { id: true },
+        _sum: { amount: true },
+        by: ['paymentMode'],
+        orderBy: { paymentMode: 'asc' },
+        where: { ...slipWhere, status: SlipStatus.ACTIVE },
+      }),
+      this.prisma.expense.aggregate({
+        _count: { id: true },
+        _sum: { amount: true },
+        where: approvedExpenseWhere,
+      }),
+      this.prisma.expense.groupBy({
+        _count: { id: true },
+        _sum: { amount: true },
+        by: ['categoryId'],
+        orderBy: { categoryId: 'asc' },
+        where: approvedExpenseWhere,
+      }),
+      this.prisma.varganiSlip.findMany({
+        include: {
+          collector: { select: { name: true } },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 100,
+        where: slipWhere,
+      }),
+      this.prisma.expense.findMany({
+        include: { category: { select: { name: true } } },
+        orderBy: [{ expenseDate: 'desc' }, { id: 'desc' }],
+        take: 100,
+        where: approvedExpenseWhere,
+      }),
+    ]);
+
+    const categoryIds = expenseCategorySummary
+      .map((row) => row.categoryId)
+      .filter((categoryId): categoryId is string => Boolean(categoryId));
+    const categories = categoryIds.length > 0
+      ? await this.prisma.expenseCategory.findMany({
+          select: { id: true, name: true },
+          where: { id: { in: categoryIds } },
+        })
+      : [];
+    const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
+    const statusMap = new Map(statusSummary.map((row) => [row.status, row]));
+    const received = statusMap.get(SlipStatus.ACTIVE);
+    const pending = statusMap.get(SlipStatus.PENDING);
+    const cancelledRows = [statusMap.get(SlipStatus.CANCELLED), statusMap.get(SlipStatus.CORRECTED)]
+      .filter((row): row is NonNullable<typeof row> => Boolean(row));
+    const receivedAmount = Number(received?._sum.amount ?? 0);
+    const approvedExpenseAmount = Number(expenseSummary._sum.amount ?? 0);
+    const generatedAt = new Date();
+
+    return createAccountingPdf({
+      expenseCategories: expenseCategorySummary
+        .map((row) => ({
+          amount: Number(row._sum.amount ?? 0),
+          count: row._count.id,
+          label: row.categoryId ? categoryNames.get(row.categoryId) ?? 'Uncategorized' : 'Uncategorized',
+        }))
+        .sort((a, b) => b.amount - a.amount),
+      expenses: recentExpenses.map((expense) => ({
+        amount: Number(expense.amount),
+        category: expense.category?.name ?? 'Uncategorized',
+        date: expense.expenseDate,
+        status: formatEnumLabel(expense.status),
+        vendor: expense.vendorName ?? 'Not specified',
+      })),
+      festivalName: festival?.name ?? 'Festival',
+      filters: describeReportFilters(query),
+      generatedAt,
+      mandalName: mandal?.name ?? 'Mandal',
+      paymentModes: paymentSummary
+        .map((row) => ({
+          amount: Number(row._sum.amount ?? 0),
+          count: row._count.id,
+          label: formatEnumLabel(row.paymentMode),
+        }))
+        .sort((a, b) => b.amount - a.amount),
+      receipts: recentReceipts.map((slip) => ({
+        amount: Number(slip.amount),
+        collector: slip.collector.name,
+        contributor: slip.contributorName,
+        date: slip.createdAt,
+        paymentMode: formatEnumLabel(slip.paymentMode),
+        slipNumber: slip.slipNumber,
+        status: formatSlipStatus(slip.status),
+      })),
+      reportPeriod: describeReportPeriod(query, festival?.startDate, festival?.endDate),
+      summary: {
+        approvedExpenseAmount,
+        approvedExpenseCount: expenseSummary._count.id,
+        balance: receivedAmount - approvedExpenseAmount,
+        cancelledAmount: cancelledRows.reduce((sum, row) => sum + Number(row._sum.amount ?? 0), 0),
+        cancelledCount: cancelledRows.reduce((sum, row) => sum + row._count.id, 0),
+        pendingAmount: Number(pending?._sum.amount ?? 0),
+        pendingCount: pending?._count.id ?? 0,
+        receivedAmount,
+        receivedCount: received?._count.id ?? 0,
+        totalReceiptCount: statusSummary.reduce((sum, row) => sum + row._count.id, 0),
+      },
+    });
+  }
 }
 
 function formatSlipStatus(status: SlipStatus): string {
   if (status === SlipStatus.ACTIVE) return 'Paid';
   return status.charAt(0) + status.slice(1).toLowerCase();
+}
+
+function formatEnumLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function describeReportPeriod(query: CollectionReportQueryDto, festivalStart?: Date, festivalEnd?: Date): string {
+  const start = query.dateFrom ? new Date(query.dateFrom) : festivalStart;
+  const end = query.dateTo ? new Date(query.dateTo) : festivalEnd;
+  if (!start && !end) return 'All available dates';
+  if (start && end) return `${formatReportDate(start)} to ${formatReportDate(end)}`;
+  if (start) return `From ${formatReportDate(start)}`;
+  return `Through ${formatReportDate(end as Date)}`;
+}
+
+function describeReportFilters(query: CollectionReportQueryDto): string[] {
+  return [
+    query.areaName ? `Area: ${query.areaName}` : '',
+    query.paymentMode ? `Payment: ${formatEnumLabel(query.paymentMode)}` : '',
+    query.groupId ? 'Specific collection group' : '',
+    query.memberId ? 'Specific collector' : '',
+  ].filter(Boolean);
+}
+
+function formatReportDate(value: Date): string {
+  return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }).format(value);
+}
+
+function reportEndDate(value: string): Date {
+  const date = new Date(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) date.setUTCHours(23, 59, 59, 999);
+  return date;
 }
 
 function formatCustomData(value: unknown): string {

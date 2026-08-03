@@ -53,4 +53,18 @@ export class ReportsController {
     const file = await this.reportsService.exportAllVarganiEntriesXlsx(ctx, mandalId, festivalId, query);
     return new StreamableFile(file);
   }
+
+  @Get('collections.pdf')
+  @Header('Content-Type', 'application/pdf')
+  @Header('Content-Disposition', 'attachment; filename="digital-vargani-financial-report.pdf"')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANDAL_ADMIN, UserRole.KHAJINDAR, UserRole.GROUP_LEADER)
+  async exportAccountingSummaryPdf(
+    @AuthUser() ctx: AuthContext,
+    @Param('mandalId') mandalId: string,
+    @Param('festivalId') festivalId: string,
+    @Query() query: CollectionReportQueryDto,
+  ) {
+    const file = await this.reportsService.exportAccountingSummaryPdf(ctx, mandalId, festivalId, query);
+    return new StreamableFile(file);
+  }
 }

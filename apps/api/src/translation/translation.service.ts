@@ -13,7 +13,11 @@ interface GoogleTranslationResult {
   };
 }
 
-type RemoteTranslationProvider = 'azure' | 'google';
+interface GroqChatCompletionResult {
+  choices?: Array<{ message?: { content?: string } }>;
+}
+
+type RemoteTranslationProvider = 'azure' | 'google' | 'groq';
 
 // Transliteration engines cannot infer the canonical spelling of ambiguous
 // place names. Keep verified, domain-specific spellings ahead of the provider.
@@ -62,6 +66,19 @@ export class TranslationService {
     const cached = this.cache.get(lookup);
     if (cached) return { provider: `${cached.provider}-cache`, text: cached.text };
 
+    const groqKey = (this.config.get('GROQ_API_KEY', { infer: true }) ?? '').trim();
+    if (groqKey) {
+      try {
+        const translated = await this.translateWithGroq(text, groqKey);
+        const corrected = correctKnownMarathiSpellings(translated);
+        this.remember(text, corrected, 'groq');
+        return { provider: 'groq', text: corrected };
+      } catch {
+        // Free-plan quota exhaustion, provider errors, and timeouts fall through
+        // to the dedicated providers when they have been configured.
+      }
+    }
+
     const azureKey = (this.config.get('AZURE_TRANSLATOR_KEY', { infer: true }) ?? '').trim();
     if (azureKey) {
       try {
@@ -89,6 +106,53 @@ export class TranslationService {
     }
 
     throw new ServiceUnavailableException('Marathi translation providers are temporarily unavailable.');
+  }
+
+  private async translateWithGroq(text: string, key: string) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4_000);
+    const model = this.config.get('GROQ_TRANSLATION_MODEL', { infer: true }).trim();
+
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        body: JSON.stringify({
+          max_tokens: 256,
+          messages: [
+            {
+              content: [
+                'You are an expert Marathi address editor for official receipts.',
+                'Convert the supplied English or Romanized Marathi text to natural Marathi in Devanagari.',
+                'Transliterate proper names, buildings, societies and localities phonetically; do not translate their meaning.',
+                'Translate only generic address words such as road, lane, near, shop and floor.',
+                'Preserve all numbers and punctuation. Never add, remove, infer or explain information.',
+                'Return only the converted Marathi text, without quotes, labels, markdown or commentary.',
+              ].join(' '),
+              role: 'system',
+            },
+            { content: text, role: 'user' },
+          ],
+          model,
+          temperature: 0.1,
+        }),
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+        },
+        method: 'POST',
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new ServiceUnavailableException(`Groq Marathi translation failed with status ${response.status}.`);
+      }
+
+      const payload = await response.json() as GroqChatCompletionResult;
+      const translated = sanitizeGroqTranslation(payload.choices?.[0]?.message?.content, text);
+      if (!translated) throw new ServiceUnavailableException('Groq Marathi translation returned invalid text.');
+      return translated;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async transliterateWithAzure(text: string, key: string) {
@@ -168,4 +232,17 @@ function decodeGoogleEntities(text: string) {
     .replaceAll('&quot;', '"')
     .replaceAll('&lt;', '<')
     .replaceAll('&gt;', '>');
+}
+
+function sanitizeGroqTranslation(value: string | undefined, source: string) {
+  if (!value) return '';
+  const text = value
+    .trim()
+    .replace(/^```(?:text)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .trim();
+  if (!text || /\r|\n/.test(text) || !/[\u0900-\u097F]/.test(text)) return '';
+  if (text.length > Math.max(80, source.length * 5)) return '';
+  return text;
 }

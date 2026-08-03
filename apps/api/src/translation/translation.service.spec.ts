@@ -9,6 +9,8 @@ function createService(overrides: Partial<AppConfig> = {}) {
     AZURE_TRANSLATOR_KEY: 'test-key',
     AZURE_TRANSLATOR_REGION: 'centralindia',
     GOOGLE_TRANSLATE_API_KEY: '',
+    GROQ_API_KEY: '',
+    GROQ_TRANSLATION_MODEL: 'llama-3.3-70b-versatile',
     ...overrides,
   };
   const config = { get: (key: keyof AppConfig) => values[key as keyof typeof values] } as ConfigService<AppConfig, true>;
@@ -57,6 +59,38 @@ describe('TranslationService', () => {
     await expect(service.transliterateMarathi('Sadashiv Peth')).resolves.toEqual({ provider: 'azure', text: 'सदाशिव पेठ' });
     await expect(service.transliterateMarathi('sadashiv peth')).resolves.toEqual({ provider: 'azure-cache', text: 'सदाशिव पेठ' });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses Groq first and caches a validated Marathi result', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'सदाशिव पेठ, मुख्य रस्ता' } }],
+    }), { status: 200 }));
+    const service = createService({ GROQ_API_KEY: 'groq-key' });
+
+    await expect(service.transliterateMarathi('Sadashiv Peth, Main Road')).resolves.toEqual({
+      provider: 'groq',
+      text: 'सदाशिव पेठ, मुख्य रस्ता',
+    });
+    await expect(service.transliterateMarathi('sadashiv peth, main road')).resolves.toEqual({
+      provider: 'groq-cache',
+      text: 'सदाशिव पेठ, मुख्य रस्ता',
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.groq.com/openai/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('falls back to Azure when Groq is unavailable', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch')
+      .mockResolvedValueOnce(new Response('{}', { status: 429 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ script: 'Deva', text: 'सदाशिव पेठ' }]), { status: 200 }));
+
+    await expect(createService({ GROQ_API_KEY: 'groq-key' }).transliterateMarathi('Sadashiv Peth'))
+      .resolves.toEqual({ provider: 'azure', text: 'सदाशिव पेठ' });
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://api.groq.com/openai/v1/chat/completions');
+    expect(fetchSpy.mock.calls[1]?.[0]).toContain('api.cognitive.microsofttranslator.com/transliterate');
   });
 
   it('uses Google NMT when Azure is not configured and caches its Marathi translation', async () => {

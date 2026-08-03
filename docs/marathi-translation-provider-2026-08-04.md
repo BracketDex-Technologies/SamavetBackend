@@ -26,18 +26,22 @@ This is primarily **transliteration** (preserving names and sounds), not semanti
 The backend now uses:
 
 1. Verified locality glossary.
-2. Azure Marathi transliteration when `AZURE_TRANSLATOR_KEY` is configured.
-3. Google Cloud Translation NMT when Azure is unavailable, times out, or returns a quota/provider error.
-4. Existing editable browser suggestion while a remote provider is unavailable.
+2. Groq-hosted `llama-3.3-70b-versatile` when `GROQ_API_KEY` is configured. Its strict prompt transliterates proper names but translates generic address terms.
+3. Azure Marathi transliteration when an existing `AZURE_TRANSLATOR_KEY` is configured.
+4. Google Cloud Translation NMT when the earlier providers are unavailable, time out, or return a quota/provider error.
+5. Existing editable browser suggestion while every remote provider is unavailable.
 
-Remote results are cached, provider keys remain server-side, and both requests have a two-second timeout. Azure is always attempted before Google.
+Remote results are validated and cached, and provider keys remain server-side. Groq has a four-second timeout; the dedicated providers retain their two-second timeouts.
 
 ## Activation requirement
 
-Add both `AZURE_TRANSLATOR_KEY` (plus `AZURE_TRANSLATOR_REGION` when required by the Azure resource) and `GOOGLE_TRANSLATE_API_KEY` to the backend deployment environment. Restrict the Google key to the Cloud Translation API and monitor both quotas. These credentials were not present locally, so the provider integration is tested but cannot be live-tested or activated from this workspace alone.
+Create a Groq API key at `https://console.groq.com/keys`, then add `GROQ_API_KEY` to the backend Vercel project's environment variables. `GROQ_TRANSLATION_MODEL` is optional and defaults to `llama-3.3-70b-versatile`. Redeploy the backend after saving the variable. Azure and Google keys remain optional fallbacks. No provider credential belongs in the frontend project or in a `VITE_` variable.
 
 Sources:
 
+- https://console.groq.com/docs/api-reference
+- https://console.groq.com/docs/rate-limits
+- https://console.groq.com/keys
 - https://cloud.google.com/products/translate/pricing
 - https://docs.cloud.google.com/translate/docs/languages
 - https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate

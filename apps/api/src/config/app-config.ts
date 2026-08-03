@@ -69,6 +69,8 @@ const appConfigSchema = z.object({
   AUTHKEY_WHATSAPP_HEADER_MEDIA_URL: z.string().optional().default(''),
   AUTHKEY_WHATSAPP_HEADER_FILE_NAME: z.string().default('Vargani Receipt'),
   AUTHKEY_WHATSAPP_ENABLED: envBoolean.default(false),
+  GROQ_API_KEY: z.string().optional().default(''),
+  GROQ_TRANSLATION_MODEL: z.string().min(1).default('llama-3.3-70b-versatile'),
   AZURE_TRANSLATOR_ENDPOINT: z.string().url().default('https://api.cognitive.microsofttranslator.com'),
   AZURE_TRANSLATOR_KEY: z.string().optional().default(''),
   AZURE_TRANSLATOR_REGION: z.string().optional().default(''),

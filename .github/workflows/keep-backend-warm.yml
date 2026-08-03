@@ -12,10 +12,32 @@ jobs:
   ping:
     name: Ping backend liveness
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
       - name: Call backend health endpoint
         env:
           HEALTH_URL: https://samavetbackend.onrender.com/api/v1/health/live
         run: |
-          curl --fail --silent --show-error --max-time 20 "$HEALTH_URL"
+          for attempt in 1 2 3; do
+            echo "Health check attempt ${attempt} of 3"
+
+            if response=$(curl \
+              --fail-with-body \
+              --location \
+              --silent \
+              --show-error \
+              --connect-timeout 15 \
+              --max-time 90 \
+              "$HEALTH_URL"); then
+              echo "$response"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "Backend is still waking up; retrying in 10 seconds."
+              sleep 10
+            fi
+          done
+
+          echo "Backend liveness check failed after 3 attempts." >&2
+          exit 1

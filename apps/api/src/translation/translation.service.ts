@@ -2,22 +2,11 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../config/app-config';
 
-interface AzureTransliterationResult {
-  script?: string;
-  text?: string;
-}
-
-interface GoogleTranslationResult {
-  data?: {
-    translations?: Array<{ translatedText?: string }>;
-  };
-}
-
 interface GroqChatCompletionResult {
   choices?: Array<{ message?: { content?: string } }>;
 }
 
-type RemoteTranslationProvider = 'azure' | 'google' | 'groq';
+type RemoteTranslationProvider = 'groq' | 'openrouter';
 
 // Transliteration engines cannot infer the canonical spelling of ambiguous
 // place names. Keep verified, domain-specific spellings ahead of the provider.
@@ -89,33 +78,20 @@ export class TranslationService {
         return { provider: 'groq', text: corrected };
       } catch {
         // Free-plan quota exhaustion, provider errors, and timeouts fall through
-        // to the dedicated providers when they have been configured.
+        // to OpenRouter when it has been configured.
       }
     }
 
-    const azureKey = (this.config.get('AZURE_TRANSLATOR_KEY', { infer: true }) ?? '').trim();
-    if (azureKey) {
+    const openRouterKey = (this.config.get('OPENROUTER_API_KEY', { infer: true }) ?? '').trim();
+    if (openRouterKey) {
       try {
-        const translated = await this.transliterateWithAzure(providerInput, azureKey);
+        const translated = await this.translateWithOpenRouter(providerInput, openRouterKey);
         const corrected = correctKnownMarathiSpellings(translated);
-        this.remember(text, corrected, 'azure');
-        return { provider: 'azure', text: corrected };
+        this.remember(text, corrected, 'openrouter');
+        return { provider: 'openrouter', text: corrected };
       } catch {
-        // Quota exhaustion (429), provider errors, and timeouts fall through
-        // to Google so the entry form remains usable.
-      }
-    }
-
-    const googleKey = (this.config.get('GOOGLE_TRANSLATE_API_KEY', { infer: true }) ?? '').trim();
-    if (googleKey) {
-      try {
-        const translated = await this.translateWithGoogle(providerInput, googleKey);
-        const corrected = correctKnownMarathiSpellings(translated);
-        this.remember(text, corrected, 'google');
-        return { provider: 'google', text: corrected };
-      } catch {
-        // The frontend retains its immediate local transliteration when both
-        // configured remote providers are unavailable.
+        // The frontend retains its immediate local transliteration when every
+        // configured remote provider is unavailable.
       }
     }
 
@@ -162,7 +138,7 @@ export class TranslationService {
       }
 
       const payload = await response.json() as GroqChatCompletionResult;
-      const translated = sanitizeGroqTranslation(payload.choices?.[0]?.message?.content, text);
+      const translated = sanitizeMarathiTranslation(payload.choices?.[0]?.message?.content, text);
       if (!translated) throw new ServiceUnavailableException('Groq Marathi translation returned invalid text.');
       return translated;
     } finally {
@@ -170,61 +146,52 @@ export class TranslationService {
     }
   }
 
-  private async transliterateWithAzure(text: string, key: string) {
-    const endpoint = this.config.get('AZURE_TRANSLATOR_ENDPOINT', { infer: true }).replace(/\/$/, '');
-    const region = this.config.get('AZURE_TRANSLATOR_REGION', { infer: true }).trim();
+  private async translateWithOpenRouter(text: string, key: string) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2_000);
+    const timeout = setTimeout(() => controller.abort(), 4_000);
+    const model = this.config.get('OPENROUTER_TRANSLATION_MODEL', { infer: true }).trim();
+    const webBaseUrl = this.config.get('PUBLIC_WEB_BASE_URL', { infer: true });
 
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'Ocp-Apim-Subscription-Key': key,
-      };
-      if (region) headers['Ocp-Apim-Subscription-Region'] = region;
-
-      const response = await fetch(
-        `${endpoint}/transliterate?api-version=3.0&language=mr&fromScript=Latn&toScript=Deva`,
-        {
-          body: JSON.stringify([{ Text: text }]),
-          headers,
-          method: 'POST',
-          signal: controller.signal,
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        body: JSON.stringify({
+          max_tokens: 256,
+          messages: [
+            {
+              content: [
+                'You are an expert Marathi address editor for official receipts.',
+                'Convert the supplied English or Romanized Marathi text to natural Marathi in Devanagari.',
+                'Transliterate proper names, buildings, societies and localities phonetically; do not translate their meaning.',
+                'Translate generic address words naturally: Main Road means मुख्य रस्ता, Road means रस्ता, Near means जवळ and Lane Number means गल्ली क्रमांक.',
+                'Text already written in Devanagari is verified and must be copied exactly without respelling it.',
+                'Preserve all numbers using the same digits and preserve punctuation. Never add, remove, infer or explain information.',
+                'Return only the converted Marathi text, without quotes, labels, markdown or commentary.',
+              ].join(' '),
+              role: 'system',
+            },
+            { content: text, role: 'user' },
+          ],
+          model,
+          temperature: 0.1,
+        }),
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': webBaseUrl,
+          'X-Title': 'Samavet ePawati',
         },
-      );
-
-      if (!response.ok) {
-        throw new ServiceUnavailableException(`Azure Marathi transliteration failed with status ${response.status}.`);
-      }
-
-      const payload = await response.json() as AzureTransliterationResult[];
-      const translated = payload[0]?.text?.trim();
-      if (!translated) throw new ServiceUnavailableException('Azure Marathi transliteration returned no text.');
-      return translated;
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  private async translateWithGoogle(text: string, key: string) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2_000);
-
-    try {
-      const response = await fetch(`https://translation.googleapis.com/language/translate/v2?key=${encodeURIComponent(key)}`, {
-        body: JSON.stringify({ format: 'text', q: text, source: 'en', target: 'mr' }),
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
         method: 'POST',
         signal: controller.signal,
       });
+
       if (!response.ok) {
-        throw new ServiceUnavailableException(`Google Marathi translation failed with status ${response.status}.`);
+        throw new ServiceUnavailableException(`OpenRouter Marathi translation failed with status ${response.status}.`);
       }
 
-      const payload = await response.json() as GoogleTranslationResult;
-      const translated = payload.data?.translations?.[0]?.translatedText?.trim();
-      if (!translated) throw new ServiceUnavailableException('Google Marathi translation returned no text.');
-      return decodeGoogleEntities(translated);
+      const payload = await response.json() as GroqChatCompletionResult;
+      const translated = sanitizeMarathiTranslation(payload.choices?.[0]?.message?.content, text);
+      if (!translated) throw new ServiceUnavailableException('OpenRouter Marathi translation returned invalid text.');
+      return translated;
     } finally {
       clearTimeout(timeout);
     }
@@ -240,16 +207,7 @@ export class TranslationService {
   }
 }
 
-function decodeGoogleEntities(text: string) {
-  return text
-    .replaceAll('&amp;', '&')
-    .replaceAll('&#39;', "'")
-    .replaceAll('&quot;', '"')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>');
-}
-
-function sanitizeGroqTranslation(value: string | undefined, source: string) {
+function sanitizeMarathiTranslation(value: string | undefined, source: string) {
   if (!value) return '';
   const text = value
     .trim()

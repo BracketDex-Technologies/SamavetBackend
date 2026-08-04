@@ -24,7 +24,7 @@ API project.
   `SUPABASE_STORAGE_BUCKET=digital-vargani`
 - `SUPABASE_RECEIPT_BUCKET=digital-vargani-receipts` and
   `STORAGE_SIGNED_URL_TTL_SECONDS=3600`
-- WhatsApp and Azure keys only when those integrations are enabled
+- WhatsApp and translation provider keys only when those integrations are enabled
 - `SWAGGER_ENABLED=false`
 
 Use the service-role key only in the API project. Never add it to a `VITE_*`

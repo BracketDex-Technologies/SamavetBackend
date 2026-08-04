@@ -33,8 +33,12 @@ const MARATHI_ADDRESS_GLOSSARY: Readonly<Record<string, string>> = {
 };
 
 const MARATHI_OUTPUT_CORRECTIONS: Readonly<Record<string, string>> = {
+  नटुबाग: 'नातूबाग',
+  नटूबाग: 'नातूबाग',
+  वणवडी: 'वानवडी',
   वनवडी: 'वानवडी',
   वनावाडी: 'वानवडी',
+  वाणावडी: 'वानवडी',
   वानवाडी: 'वानवडी',
 };
 
@@ -47,6 +51,15 @@ function correctKnownMarathiSpellings(text: string) {
     (current, [variant, canonical]) => current.replaceAll(variant, canonical),
     text,
   );
+}
+
+function applyVerifiedLocalities(text: string) {
+  return Object.entries(MARATHI_ADDRESS_GLOSSARY)
+    .sort(([left], [right]) => right.length - left.length)
+    .reduce((current, [variant, canonical]) => {
+      const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+      return current.replace(new RegExp(`(^|[^A-Za-z])${escaped}(?=$|[^A-Za-z])`, 'gi'), (_, prefix: string) => `${prefix}${canonical}`);
+    }, text);
 }
 
 @Injectable()
@@ -65,11 +78,12 @@ export class TranslationService {
 
     const cached = this.cache.get(lookup);
     if (cached) return { provider: `${cached.provider}-cache`, text: cached.text };
+    const providerInput = applyVerifiedLocalities(text);
 
     const groqKey = (this.config.get('GROQ_API_KEY', { infer: true }) ?? '').trim();
     if (groqKey) {
       try {
-        const translated = await this.translateWithGroq(text, groqKey);
+        const translated = await this.translateWithGroq(providerInput, groqKey);
         const corrected = correctKnownMarathiSpellings(translated);
         this.remember(text, corrected, 'groq');
         return { provider: 'groq', text: corrected };
@@ -82,7 +96,7 @@ export class TranslationService {
     const azureKey = (this.config.get('AZURE_TRANSLATOR_KEY', { infer: true }) ?? '').trim();
     if (azureKey) {
       try {
-        const translated = await this.transliterateWithAzure(text, azureKey);
+        const translated = await this.transliterateWithAzure(providerInput, azureKey);
         const corrected = correctKnownMarathiSpellings(translated);
         this.remember(text, corrected, 'azure');
         return { provider: 'azure', text: corrected };
@@ -95,7 +109,7 @@ export class TranslationService {
     const googleKey = (this.config.get('GOOGLE_TRANSLATE_API_KEY', { infer: true }) ?? '').trim();
     if (googleKey) {
       try {
-        const translated = await this.translateWithGoogle(text, googleKey);
+        const translated = await this.translateWithGoogle(providerInput, googleKey);
         const corrected = correctKnownMarathiSpellings(translated);
         this.remember(text, corrected, 'google');
         return { provider: 'google', text: corrected };
@@ -123,8 +137,9 @@ export class TranslationService {
                 'You are an expert Marathi address editor for official receipts.',
                 'Convert the supplied English or Romanized Marathi text to natural Marathi in Devanagari.',
                 'Transliterate proper names, buildings, societies and localities phonetically; do not translate their meaning.',
-                'Translate only generic address words such as road, lane, near, shop and floor.',
-                'Preserve all numbers and punctuation. Never add, remove, infer or explain information.',
+                'Translate generic address words naturally: Main Road means मुख्य रस्ता, Road means रस्ता, Near means जवळ and Lane Number means गल्ली क्रमांक.',
+                'Text already written in Devanagari is verified and must be copied exactly without respelling it.',
+                'Preserve all numbers using the same digits and preserve punctuation. Never add, remove, infer or explain information.',
                 'Return only the converted Marathi text, without quotes, labels, markdown or commentary.',
               ].join(' '),
               role: 'system',
@@ -244,5 +259,9 @@ function sanitizeGroqTranslation(value: string | undefined, source: string) {
     .trim();
   if (!text || /\r|\n/.test(text) || !/[\u0900-\u097F]/.test(text)) return '';
   if (text.length > Math.max(80, source.length * 5)) return '';
-  return text;
+  const normalizedDigits = text.replace(/[०-९]/g, (digit) => String('०१२३४५६७८९'.indexOf(digit)));
+  const sourceNumbers = source.match(/\d+/g) ?? [];
+  const translatedNumbers = normalizedDigits.match(/\d+/g) ?? [];
+  if (sourceNumbers.join('|') !== translatedNumbers.join('|')) return '';
+  return normalizedDigits;
 }

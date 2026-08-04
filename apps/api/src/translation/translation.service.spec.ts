@@ -82,6 +82,23 @@ describe('TranslationService', () => {
     );
   });
 
+  it('locks verified Pune locality spellings inside longer Groq addresses and preserves ASCII digits', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'फ्लॅट १२, केदारी नगर, मुख्य रस्ता जवळ, वानवडी, पुणे' } }],
+    }), { status: 200 }));
+
+    await expect(createService({ GROQ_API_KEY: 'groq-key' }).transliterateMarathi(
+      'Flat 12, Kedari Nagar, Near Main Road, Wanawadi, Pune',
+    )).resolves.toEqual({
+      provider: 'groq',
+      text: 'फ्लॅट 12, केदारी नगर, मुख्य रस्ता जवळ, वानवडी, पुणे',
+    });
+
+    const request = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)) as { messages: Array<{ content: string }> };
+    expect(request.messages[1]?.content).toContain('वानवडी');
+    expect(request.messages[1]?.content).not.toContain('Wanawadi');
+  });
+
   it('falls back to Azure when Groq is unavailable', async () => {
     const fetchSpy = jest.spyOn(global, 'fetch')
       .mockResolvedValueOnce(new Response('{}', { status: 429 }))
